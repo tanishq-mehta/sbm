@@ -79,7 +79,42 @@ SQLite is the easiest fit for this record count. The app stores the original wor
 
 For a deployed production-style app, use Supabase/Postgres instead of SQLite unless the host provides durable disk storage. Free web services often use temporary filesystems, so SQLite edits can disappear after redeploys or restarts.
 
-## Deployment Shape
+## Vercel Deployment
+
+This project is ready for Vercel with Supabase/Postgres as the production database.
+
+1. Push the project to GitHub.
+2. Go to Vercel and import the GitHub repo.
+3. Keep the framework preset as **Vite**.
+4. Use these build settings:
+
+Build command:
+
+```bash
+npm run build
+```
+
+Output directory:
+
+```bash
+dist
+```
+
+5. Add these environment variables in Vercel:
+
+```bash
+DATABASE_URL=your_supabase_connection_string
+DATABASE_SSL=true
+DATABASE_POOL_MAX=3
+```
+
+6. Deploy.
+
+The React frontend is served from `dist/`. The backend API runs through the Vercel function at `api/[...path].mjs`, so existing routes such as `/api/login`, `/api/people`, and `/api/export/people.xlsx` stay the same.
+
+## Traditional Node Deployment
+
+For hosts that run a long-lived Node server, use:
 
 Build command:
 

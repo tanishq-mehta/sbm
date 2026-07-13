@@ -407,6 +407,9 @@ function getPool() {
   pgPool = new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: process.env.DATABASE_SSL === "false" ? false : { rejectUnauthorized: false },
+    max: Number(process.env.DATABASE_POOL_MAX || 3),
+    idleTimeoutMillis: 10_000,
+    connectionTimeoutMillis: 10_000,
   });
   return pgPool;
 }
