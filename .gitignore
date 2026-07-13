@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.npm-cache/
+data/*.sqlite
+data/*.sqlite-*
+.DS_Store
+.env
