@@ -1,4 +1,5 @@
 import {
+  checkDatabaseConnection,
   databaseProvider,
   dropdownOptions,
   fields,
@@ -29,7 +30,32 @@ export async function handleApiRequest(req, res) {
     const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
 
     if (url.pathname === "/api/health") {
-      sendJson(res, 200, { ok: true, database: databaseProvider });
+      if (url.searchParams.get("db") === "1") {
+        try {
+          await ensureDatabaseInitialized();
+          await checkDatabaseConnection();
+          sendJson(res, 200, {
+            ok: true,
+            database: databaseProvider,
+            connected: true,
+          });
+        } catch (error) {
+          console.error(error);
+          sendJson(res, 500, {
+            ok: false,
+            database: databaseProvider,
+            connected: false,
+            error: formatSafeError(error),
+          });
+        }
+        return;
+      }
+
+      sendJson(res, 200, {
+        ok: true,
+        database: databaseProvider,
+        hasDatabaseUrl: Boolean(process.env.DATABASE_URL),
+      });
       return;
     }
 
@@ -126,13 +152,42 @@ export async function handleApiRequest(req, res) {
     sendJson(res, 404, { message: "API route not found." });
   } catch (error) {
     console.error(error);
-    sendJson(res, 500, { message: "Unexpected server error." });
+    sendJson(res, 500, {
+      message: "Unexpected server error.",
+      error: formatSafeError(error),
+    });
   }
 }
 
 function ensureDatabaseInitialized() {
-  initializationPromise ||= initializeDatabase();
+  initializationPromise ||= initializeDatabase().catch((error) => {
+    initializationPromise = undefined;
+    throw error;
+  });
   return initializationPromise;
+}
+
+function formatSafeError(error) {
+  return {
+    name: error?.name || "Error",
+    code: error?.code || error?.errno || "",
+    message: sanitizeErrorMessage(error?.message || String(error || "Unknown error")),
+  };
+}
+
+function sanitizeErrorMessage(message) {
+  let safeMessage = message;
+  if (process.env.DATABASE_URL) {
+    safeMessage = safeMessage.replaceAll(process.env.DATABASE_URL, "[DATABASE_URL]");
+    try {
+      const parsed = new URL(process.env.DATABASE_URL);
+      if (parsed.password) safeMessage = safeMessage.replaceAll(parsed.password, "[PASSWORD]");
+      if (parsed.username) safeMessage = safeMessage.replaceAll(parsed.username, "[USERNAME]");
+    } catch {
+      // Ignore malformed URLs here; the original parse error is more useful.
+    }
+  }
+  return safeMessage;
 }
 
 function isAuthorized(req) {

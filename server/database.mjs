@@ -62,6 +62,15 @@ export async function closeDatabase() {
   initialized = false;
 }
 
+export async function checkDatabaseConnection() {
+  if (databaseProvider === "postgres") {
+    await getPool().query("SELECT 1");
+    return;
+  }
+
+  getSqlite().prepare("SELECT 1").get();
+}
+
 export async function reseedDatabase() {
   await initializeDatabase({ seedIfEmpty: false });
 

@@ -110,7 +110,7 @@ DATABASE_POOL_MAX=3
 
 6. Deploy.
 
-The React frontend is served from `dist/`. The backend API runs through the Vercel function at `api/[...path].mjs`, so existing routes such as `/api/login`, `/api/people`, and `/api/export/people.xlsx` stay the same.
+The React frontend is served from `dist/`. The backend API runs through the Vercel function at `api/router.mjs`, with `vercel.json` rewriting `/api/*` requests into that function. Existing routes such as `/api/login`, `/api/people`, and `/api/export/people.xlsx` stay the same.
 
 ## Traditional Node Deployment
 
