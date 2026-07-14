@@ -724,11 +724,20 @@ function FieldControl({ field, value, options = [], onChange }) {
     <label className={multiline ? "span-2" : ""}>
       <span>{field}</span>
       {isDateField ? (
-        <input
-          type="date"
-          value={dateInputValue(value)}
-          onChange={(event) => onChange(formatStoredDate(event.target.value))}
-        />
+        <div className="date-field">
+          <input
+            type="text"
+            value={dateDisplayValue(value)}
+            placeholder="12-sep-80"
+            readOnly
+          />
+          <input
+            type="date"
+            aria-label={`Choose ${field}`}
+            value={dateInputValue(value)}
+            onChange={(event) => onChange(formatStoredDate(event.target.value))}
+          />
+        </div>
       ) : selectOptions.length ? (
         <div className="combo-field">
           <input
@@ -807,6 +816,11 @@ function dateInputValue(value) {
   const parsed = parseDateParts(value);
   if (!parsed) return "";
   return `${parsed.year}-${String(parsed.month).padStart(2, "0")}-${String(parsed.day).padStart(2, "0")}`;
+}
+
+function dateDisplayValue(value) {
+  const formatted = formatStoredDate(value);
+  return formatted || String(value || "");
 }
 
 function formatStoredDate(value) {

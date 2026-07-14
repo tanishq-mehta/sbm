@@ -606,6 +606,17 @@ tbody tr:focus {
   grid-column: span 2;
 }
 
+.date-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 170px;
+  gap: 10px;
+}
+
+.date-field input[readonly] {
+  color: #173f3b;
+  background: #f7faf8;
+}
+
 .form-actions {
   position: sticky;
   bottom: 0;
@@ -637,6 +648,7 @@ tbody tr:focus {
   .field-grid,
   .summary-toolbar,
   .summary-grid,
+  .date-field,
   .combo-field {
     grid-template-columns: 1fr;
   }
