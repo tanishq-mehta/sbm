@@ -13,8 +13,12 @@ import {
   updatePerson,
 } from "./database.mjs";
 import { createWorkbookBuffer } from "./xlsx.mjs";
-
-const authToken = "dev-admin-token";
+import {
+  AuthConfigurationError,
+  authenticateUser,
+  createSessionToken,
+  verifySessionToken,
+} from "./auth.mjs";
 
 let initializationPromise;
 
@@ -61,10 +65,11 @@ export async function handleApiRequest(req, res) {
 
     if (url.pathname === "/api/login" && req.method === "POST") {
       const body = await readJson(req);
-      if (body.username === "admin" && body.password === "123456") {
+      const user = authenticateUser(body.username, body.password);
+      if (user) {
         sendJson(res, 200, {
-          token: authToken,
-          user: { username: "admin" },
+          token: createSessionToken(user.username),
+          user,
         });
       } else {
         sendJson(res, 401, { message: "Invalid username or password." });
@@ -152,6 +157,11 @@ export async function handleApiRequest(req, res) {
     sendJson(res, 404, { message: "API route not found." });
   } catch (error) {
     console.error(error);
+    const authResponse = authErrorResponse(error);
+    if (authResponse) {
+      sendJson(res, 500, authResponse);
+      return;
+    }
     sendJson(res, 500, {
       message: "Unexpected server error.",
       error: formatSafeError(error),
@@ -191,7 +201,9 @@ function sanitizeErrorMessage(message) {
 }
 
 function isAuthorized(req) {
-  return req.headers.authorization === `Bearer ${authToken}`;
+  const authorization = req.headers.authorization || "";
+  const [type, token] = authorization.split(" ");
+  return type === "Bearer" && Boolean(verifySessionToken(token));
 }
 
 function applyCors(res) {
@@ -204,6 +216,16 @@ function sendJson(res, status, payload) {
   if (res.headersSent) return;
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(payload));
+}
+
+function authErrorResponse(error) {
+  if (error instanceof AuthConfigurationError) {
+    return {
+      message: "Authentication is not configured.",
+      error: formatSafeError(error),
+    };
+  }
+  return null;
 }
 
 function readJson(req) {

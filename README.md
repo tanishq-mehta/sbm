@@ -14,8 +14,26 @@ The six sheets are treated only as import sources. Records are stored and shown 
 
 ## Login
 
-- Username: `admin`
-- Password: `123456`
+Login users are configured through environment variables, not hardcoded in the repo.
+
+Generate one allowed user entry:
+
+```bash
+npm run auth:user -- admin "choose-a-strong-password"
+```
+
+Set `AUTH_USERS_JSON` to a JSON array of generated entries:
+
+```bash
+AUTH_USERS_JSON='[{"username":"admin","passwordHash":"pbkdf2_sha256$..."}]'
+```
+
+Generate and set a session signing secret:
+
+```bash
+npm run auth:secret
+AUTH_SECRET=generated-secret
+```
 
 ## Run Locally
 
@@ -106,6 +124,8 @@ dist
 DATABASE_URL=your_supabase_connection_string
 DATABASE_SSL=true
 DATABASE_POOL_MAX=3
+AUTH_USERS_JSON=[{"username":"admin","passwordHash":"pbkdf2_sha256$..."}]
+AUTH_SECRET=generated-secret
 ```
 
 6. Deploy.
