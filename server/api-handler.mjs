@@ -77,7 +77,11 @@ export async function handleApiRequest(req, res) {
       return;
     }
 
-    if (url.pathname.startsWith("/api/") && !isAuthorized(req)) {
+    const authenticatedUser = url.pathname.startsWith("/api/")
+      ? getAuthenticatedUser(req)
+      : null;
+
+    if (url.pathname.startsWith("/api/") && !authenticatedUser) {
       sendJson(res, 401, { message: "Authentication required." });
       return;
     }
@@ -145,7 +149,9 @@ export async function handleApiRequest(req, res) {
 
     if (personMatch && req.method === "PUT") {
       const body = await readJson(req);
-      const person = await updatePerson(personMatch[1], body.data || {});
+      const person = await updatePerson(personMatch[1], body.data || {}, {
+        changedBy: authenticatedUser.username,
+      });
       if (!person) {
         sendJson(res, 404, { message: "Person not found." });
         return;
@@ -200,10 +206,10 @@ function sanitizeErrorMessage(message) {
   return safeMessage;
 }
 
-function isAuthorized(req) {
+function getAuthenticatedUser(req) {
   const authorization = req.headers.authorization || "";
   const [type, token] = authorization.split(" ");
-  return type === "Bearer" && Boolean(verifySessionToken(token));
+  return type === "Bearer" ? verifySessionToken(token) : null;
 }
 
 function applyCors(res) {

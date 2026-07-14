@@ -407,7 +407,10 @@ function AuditPage({ token }) {
               <header className="audit-entry-header">
                 <div>
                   <h2>{entry.name || "Unnamed user"}</h2>
-                  <p>Badge {entry.badgeNo || "-"} · Record #{entry.personId}</p>
+                  <p>
+                    Badge {entry.badgeNo || "-"} · Record #{entry.personId} · Changes done by:{" "}
+                    {entry.changedBy || "system"}
+                  </p>
                 </div>
                 <time>{formatDateTime(entry.createdAt)}</time>
               </header>

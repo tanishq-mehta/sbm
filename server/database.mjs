@@ -264,7 +264,7 @@ export async function listAuditLogs({ limit = 500 } = {}) {
       ? (
           await getPool().query(
             `
-              SELECT id, person_id, name, badge_no, "change", created_at
+              SELECT id, person_id, name, badge_no, changed_by, "change", created_at
               FROM audit_logs
               ORDER BY created_at DESC, id DESC
               LIMIT $1
@@ -274,7 +274,7 @@ export async function listAuditLogs({ limit = 500 } = {}) {
         ).rows
       : getSqlite()
           .prepare(`
-            SELECT id, person_id, name, badge_no, "change", created_at
+            SELECT id, person_id, name, badge_no, changed_by, "change", created_at
             FROM audit_logs
             ORDER BY created_at DESC, id DESC
             LIMIT ?
@@ -312,13 +312,14 @@ async function getAllPersonRows() {
     .all();
 }
 
-export async function updatePerson(id, incomingData) {
+export async function updatePerson(id, incomingData, options = {}) {
   const existing = await getPerson(id);
   if (!existing) return null;
 
   const data = cleanData({ ...existing.data, ...(incomingData || {}) });
   const summary = summarize(data);
   const change = diffData(existing.data, data);
+  const changedBy = normalizeChangedBy(options.changedBy);
 
   if (Object.keys(change).length === 0) {
     return existing;
@@ -350,10 +351,10 @@ export async function updatePerson(id, incomingData) {
       );
       await client.query(
         `
-          INSERT INTO audit_logs (person_id, name, badge_no, "change")
-          VALUES ($1, $2, $3, $4)
+          INSERT INTO audit_logs (person_id, name, badge_no, changed_by, "change")
+          VALUES ($1, $2, $3, $4, $5)
         `,
-        [Number(id), summary.fullName, summary.badgeNo, change]
+        [Number(id), summary.fullName, summary.badgeNo, changedBy, change]
       );
       await client.query("COMMIT");
     } catch (error) {
@@ -387,10 +388,10 @@ export async function updatePerson(id, incomingData) {
         );
       db
         .prepare(`
-          INSERT INTO audit_logs (person_id, name, badge_no, "change")
-          VALUES (?, ?, ?, ?)
+          INSERT INTO audit_logs (person_id, name, badge_no, changed_by, "change")
+          VALUES (?, ?, ?, ?, ?)
         `)
-        .run(Number(id), summary.fullName, summary.badgeNo, JSON.stringify(change));
+        .run(Number(id), summary.fullName, summary.badgeNo, changedBy, JSON.stringify(change));
       db.exec("COMMIT");
     } catch (error) {
       db.exec("ROLLBACK");
@@ -492,10 +493,15 @@ function migrateSqlite() {
       person_id INTEGER NOT NULL,
       name TEXT NOT NULL,
       badge_no TEXT,
+      changed_by TEXT NOT NULL DEFAULT 'system',
       "change" TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
   `);
+  const auditColumns = db.prepare("PRAGMA table_info(audit_logs)").all().map((column) => column.name);
+  if (!auditColumns.includes("changed_by")) {
+    db.exec("ALTER TABLE audit_logs ADD COLUMN changed_by TEXT NOT NULL DEFAULT 'system'");
+  }
   db.exec("CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_audit_logs_person_id ON audit_logs(person_id)");
 }
@@ -525,10 +531,12 @@ async function migratePostgres() {
       person_id BIGINT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
       name TEXT NOT NULL,
       badge_no TEXT,
+      changed_by TEXT NOT NULL DEFAULT 'system',
       "change" JSONB NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  await pool.query("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS changed_by TEXT NOT NULL DEFAULT 'system'");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs (created_at DESC)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_audit_logs_person_id ON audit_logs (person_id)");
 }
@@ -693,9 +701,14 @@ function rowToAuditLog(row) {
     personId: Number(row.person_id),
     name: row.name || "",
     badgeNo: row.badge_no || "",
+    changedBy: row.changed_by || "system",
     change: typeof row.change === "string" ? JSON.parse(row.change) : row.change,
     createdAt: row.created_at || "",
   };
+}
+
+function normalizeChangedBy(value) {
+  return String(value || "system").trim() || "system";
 }
 
 function toSummary(person) {
