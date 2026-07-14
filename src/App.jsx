@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 
 const TOKEN_KEY = "sbm-user-manager-token";
+const dateFields = ["Birth Date", "Initiation Date"];
+const addressLimitFields = ["Address Line 1", "Address Line 2"];
 
 const sections = [
   {
@@ -10,7 +12,6 @@ const sections = [
       "First Name",
       "Middle Name",
       "Last Name",
-      "Verification Status",
       "Gender",
       "Birth Date",
       "Aadhaar No",
@@ -57,6 +58,12 @@ const sections = [
       "INITIATION_PLACE",
       "Jatha Remarks",
       "Photo File Name",
+    ],
+  },
+  {
+    title: "Verification",
+    fields: [
+      "Verification Status",
     ],
   },
 ];
@@ -705,7 +712,9 @@ function FieldControl({ field, value, options = [], onChange }) {
     "New Address",
     "Jatha Remarks",
   ].includes(field);
-  const type = inputType(field, value);
+  const isDateField = dateFields.includes(field);
+  const maxLength = addressLimitFields.includes(field) ? 75 : undefined;
+  const type = inputType(field);
   const selectOptions = useMemo(() => {
     if (!options.length) return [];
     return [...new Set(options.filter(Boolean))];
@@ -714,9 +723,20 @@ function FieldControl({ field, value, options = [], onChange }) {
   return (
     <label className={multiline ? "span-2" : ""}>
       <span>{field}</span>
-      {selectOptions.length ? (
+      {isDateField ? (
+        <input
+          type="date"
+          value={dateInputValue(value)}
+          onChange={(event) => onChange(formatStoredDate(event.target.value))}
+        />
+      ) : selectOptions.length ? (
         <div className="combo-field">
-          <input type={type} value={value} onChange={(event) => onChange(event.target.value)} />
+          <input
+            type={type}
+            value={value}
+            maxLength={maxLength}
+            onChange={(event) => onChange(event.target.value)}
+          />
           <select value={selectOptions.includes(value) ? value : ""} onChange={(event) => onChange(event.target.value)}>
             <option value="">Select</option>
             {selectOptions.map((option) => (
@@ -727,9 +747,19 @@ function FieldControl({ field, value, options = [], onChange }) {
           </select>
         </div>
       ) : multiline ? (
-        <textarea value={value} onChange={(event) => onChange(event.target.value)} rows={3} />
+        <textarea
+          value={value}
+          maxLength={maxLength}
+          onChange={(event) => onChange(event.target.value)}
+          rows={3}
+        />
       ) : (
-        <input type={type} value={value} onChange={(event) => onChange(event.target.value)} />
+        <input
+          type={type}
+          value={value}
+          maxLength={maxLength}
+          onChange={(event) => onChange(event.target.value)}
+        />
       )}
     </label>
   );
@@ -767,11 +797,66 @@ function buildSections(fields) {
   return result;
 }
 
-function inputType(field, value) {
+function inputType(field) {
   if (/email/i.test(field)) return "email";
   if (/mobile|phone|contact|aadhaar|pin code/i.test(field)) return "tel";
-  if (field === "Birth Date" && /^\d{4}-\d{2}-\d{2}$/.test(value)) return "date";
   return "text";
+}
+
+function dateInputValue(value) {
+  const parsed = parseDateParts(value);
+  if (!parsed) return "";
+  return `${parsed.year}-${String(parsed.month).padStart(2, "0")}-${String(parsed.day).padStart(2, "0")}`;
+}
+
+function formatStoredDate(value) {
+  const parsed = parseDateParts(value);
+  if (!parsed) return "";
+  return `${parsed.day}-${monthNames[parsed.month - 1]}-${String(parsed.year).slice(-2)}`;
+}
+
+const monthNames = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+
+function parseDateParts(value) {
+  const text = String(value || "").trim();
+  if (!text) return null;
+
+  let match = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (match) return validDate(Number(match[1]), Number(match[2]), Number(match[3]));
+
+  match = text.match(/^(\d{1,2})[-/\s]([A-Za-z]{3,9})[-/\s](\d{2,4})$/);
+  if (match) {
+    const month = monthFromText(match[2]);
+    if (!month) return null;
+    return validDate(expandYear(match[3]), month, Number(match[1]));
+  }
+
+  match = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (match) return validDate(expandYear(match[3]), Number(match[2]), Number(match[1]));
+
+  return null;
+}
+
+function monthFromText(value) {
+  const index = monthNames.findIndex((month) => value.toLowerCase().startsWith(month));
+  return index === -1 ? 0 : index + 1;
+}
+
+function expandYear(value) {
+  const year = Number(value);
+  if (String(value).length === 4) return year;
+  const currentTwoDigitYear = new Date().getFullYear() % 100;
+  return year <= currentTwoDigitYear ? 2000 + year : 1900 + year;
+}
+
+function validDate(year, month, day) {
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return null;
+  if (year < 1900 || year > 2099 || month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
+    return null;
+  }
+  return { year, month, day };
 }
 
 function displayFullName(data) {

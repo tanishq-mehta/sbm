@@ -14,6 +14,15 @@ ROOT = Path(__file__).resolve().parents[1]
 TARGET_SHEETS = {f"team{i}" for i in range(1, 7)}
 HEADER_MARKERS = {"Badge no.", "First Name", "Mobile No"}
 VERIFICATION_OPTIONS = ["None", "Verification Done", "Rectification Done"]
+INITIATION_BY_OPTIONS = [
+    "Baba Gurinder Singh Ji",
+    "Maharaj Charan Singh Ji",
+    "Maharaj Jagat Singh Ji",
+    "Maharaj Sawan Singh Ji",
+    "Hazur Jasdeep Singh Ji",
+]
+DATE_FIELDS = {"Birth Date", "Initiation Date"}
+MONTH_NAMES = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
 
 
 def verification_value(value: object) -> str:
@@ -55,12 +64,80 @@ def normalize_field_value(field: str, value: object) -> str:
     normalized = normalize_value(value)
     if field == "Verification Status":
         return verification_value(value)
+    if field in DATE_FIELDS:
+        return date_value(value)
     if field == "Email Id":
         normalized = re.sub(r"^\s*email\s*id\s*[:;\-]?\s*", "", normalized, flags=re.IGNORECASE)
         match = re.search(r"[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}", normalized, flags=re.IGNORECASE)
         if match:
             return match.group(0)
     return normalized
+
+
+def date_value(value: object) -> str:
+    if isinstance(value, (datetime, pd.Timestamp)):
+        return format_date_parts(value.year, value.month, value.day)
+    if isinstance(value, date):
+        return format_date_parts(value.year, value.month, value.day)
+
+    normalized = normalize_value(value)
+    if not normalized:
+        return ""
+
+    parsed = parse_date_parts(normalized)
+    if not parsed:
+        return normalized
+    year, month, day = parsed
+    return format_date_parts(year, month, day)
+
+
+def parse_date_parts(value: str) -> tuple[int, int, int] | None:
+    match = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})$", value)
+    if match:
+        return valid_date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+
+    match = re.match(r"^(\d{1,2})[-/\s]([A-Za-z]{3,9})[-/\s](\d{2,4})$", value)
+    if match:
+        month = month_from_text(match.group(2))
+        if not month:
+            return None
+        return valid_date(expand_year(match.group(3)), month, int(match.group(1)))
+
+    match = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{2,4})$", value)
+    if match:
+        return valid_date(expand_year(match.group(3)), int(match.group(2)), int(match.group(1)))
+
+    return None
+
+
+def month_from_text(value: str) -> int:
+    lower = value.lower()
+    for index, month in enumerate(MONTH_NAMES, start=1):
+        if lower.startswith(month):
+            return index
+    return 0
+
+
+def expand_year(value: str) -> int:
+    year = int(value)
+    if len(value) == 4:
+        return year
+    current_two_digit_year = datetime.now().year % 100
+    return 2000 + year if year <= current_two_digit_year else 1900 + year
+
+
+def valid_date(year: int, month: int, day: int) -> tuple[int, int, int] | None:
+    try:
+        date(year, month, day)
+    except ValueError:
+        return None
+    if year < 1900 or year > 2099:
+        return None
+    return year, month, day
+
+
+def format_date_parts(year: int, month: int, day: int) -> str:
+    return f"{day}-{MONTH_NAMES[month - 1]}-{str(year)[-2:]}"
 
 
 def sheet_values(workbook: Path, sheet_name: str) -> list[str]:
@@ -89,6 +166,7 @@ def dropdown_options(workbook: Path) -> dict[str, list[str]]:
         "Educational Qualification": sheet_values(workbook, "Qualification"),
         "Sewa Dept - Local Centre": departments,
         "Sewa Dept - Major Centre": departments,
+        "Initiation_By": INITIATION_BY_OPTIONS,
     }
 
 

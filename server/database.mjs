@@ -25,6 +25,8 @@ export const databaseProvider = process.env.DATABASE_URL ? "postgres" : "sqlite"
 const emailField = "Email Id";
 const verificationField = "Verification Status";
 const verificationOptions = ["None", "Verification Done", "Rectification Done"];
+const dateFields = new Set(["Birth Date", "Initiation Date"]);
+const monthNames = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
 
 let sqliteDb;
 let pgPool;
@@ -635,7 +637,56 @@ function normalizeValue(value) {
 function normalizeFieldValue(field, value) {
   const normalized = normalizeValue(value);
   if (field === verificationField) return normalizeVerificationValue(normalized);
+  if (dateFields.has(field)) return normalizeDateValue(normalized);
   return field === emailField ? sanitizeEmailValue(normalized) : normalized;
+}
+
+function normalizeDateValue(value) {
+  const parsed = parseDateParts(value);
+  if (!parsed) return normalizeValue(value);
+  return `${parsed.day}-${monthNames[parsed.month - 1]}-${String(parsed.year).slice(-2)}`;
+}
+
+function parseDateParts(value) {
+  const text = normalizeValue(value);
+  if (!text) return null;
+
+  let match = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (match) return validDate(Number(match[1]), Number(match[2]), Number(match[3]));
+
+  match = text.match(/^(\d{1,2})[-/\s]([A-Za-z]{3,9})[-/\s](\d{2,4})$/);
+  if (match) {
+    const month = monthFromText(match[2]);
+    return month ? validDate(expandYear(match[3]), month, Number(match[1])) : null;
+  }
+
+  match = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (match) return validDate(expandYear(match[3]), Number(match[2]), Number(match[1]));
+
+  return null;
+}
+
+function monthFromText(value) {
+  const index = monthNames.findIndex((month) => value.toLowerCase().startsWith(month));
+  return index === -1 ? 0 : index + 1;
+}
+
+function expandYear(value) {
+  const text = String(value);
+  const year = Number(text);
+  if (text.length === 4) return year;
+  const currentTwoDigitYear = new Date().getFullYear() % 100;
+  return year <= currentTwoDigitYear ? 2000 + year : 1900 + year;
+}
+
+function validDate(year, month, day) {
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return null;
+  if (year < 1900 || year > 2099 || month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
+    return null;
+  }
+  return { year, month, day };
 }
 
 export function sanitizeEmailValue(value) {
