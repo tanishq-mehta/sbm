@@ -365,6 +365,7 @@ function HomePage({ token }) {
 function AuditPage({ token }) {
   const [audits, setAudits] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -386,6 +387,36 @@ function AuditPage({ token }) {
     };
   }, [token]);
 
+  async function downloadAuditExcel() {
+    setDownloading(true);
+    setError("");
+    try {
+      const response = await fetch("/api/export/audits.xlsx", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) {
+        const payload = await response.json();
+        throw new Error(payload.message || "Download failed.");
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filenameFromDisposition(
+        response.headers.get("Content-Disposition"),
+        "sbm-audit-history.xlsx"
+      );
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setDownloading(false);
+    }
+  }
+
   return (
     <main className="page audit-page">
       <section className="page-heading">
@@ -393,9 +424,14 @@ function AuditPage({ token }) {
           <p className="eyebrow">Audit history</p>
           <h1>Saved form changes</h1>
         </div>
-        <button className="secondary-button" onClick={() => (window.location.hash = "#/home")}>
-          Back to search
-        </button>
+        <div className="page-actions">
+          <button className="primary-button" onClick={downloadAuditExcel} disabled={downloading}>
+            {downloading ? "Preparing..." : "Download audit Excel"}
+          </button>
+          <button className="secondary-button" onClick={() => (window.location.hash = "#/home")}>
+            Back to search
+          </button>
+        </div>
       </section>
 
       {error ? <p className="form-error wide">{error}</p> : null}
@@ -880,9 +916,9 @@ function displayFullName(data) {
     .trim();
 }
 
-function filenameFromDisposition(disposition) {
+function filenameFromDisposition(disposition, fallback = "sbm-users.xlsx") {
   const match = disposition?.match(/filename="([^"]+)"/);
-  return match?.[1] || "sbm-users.xlsx";
+  return match?.[1] || fallback;
 }
 
 function statusRows(counts = {}) {

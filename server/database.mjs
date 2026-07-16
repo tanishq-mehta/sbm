@@ -286,6 +286,28 @@ export async function listAuditLogs({ limit = 500 } = {}) {
   return rows.map(rowToAuditLog);
 }
 
+export async function listAllAuditLogs() {
+  await initializeDatabase();
+  const rows =
+    databaseProvider === "postgres"
+      ? (
+          await getPool().query(`
+            SELECT id, person_id, name, badge_no, changed_by, "change", created_at
+            FROM audit_logs
+            ORDER BY created_at DESC, id DESC
+          `)
+        ).rows
+      : getSqlite()
+          .prepare(`
+            SELECT id, person_id, name, badge_no, changed_by, "change", created_at
+            FROM audit_logs
+            ORDER BY created_at DESC, id DESC
+          `)
+          .all();
+
+  return rows.map(rowToAuditLog);
+}
+
 export async function getPerson(id) {
   await initializeDatabase();
 

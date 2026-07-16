@@ -7,6 +7,7 @@ import {
   getVerificationSummary,
   initializeDatabase,
   listAuditLogs,
+  listAllAuditLogs,
   listAllPeople,
   listPeople,
   searchableFields,
@@ -107,6 +108,34 @@ export async function handleApiRequest(req, res) {
       res.writeHead(200, {
         "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "Content-Disposition": `attachment; filename="sbm-users-${date}.xlsx"`,
+        "Content-Length": workbook.length,
+        "Cache-Control": "no-store",
+      });
+      res.end(workbook);
+      return;
+    }
+
+    if (url.pathname === "/api/export/audits.xlsx" && req.method === "GET") {
+      const audits = await listAllAuditLogs();
+      const workbook = createWorkbookBuffer({
+        sheetName: "Audit History",
+        headers: [
+          "Audit ID",
+          "Changed At",
+          "Changed By",
+          "Record ID",
+          "Name",
+          "Badge Number",
+          "Field",
+          "Old Value",
+          "New Value",
+        ],
+        rows: auditWorkbookRows(audits),
+      });
+      const date = new Date().toISOString().slice(0, 10);
+      res.writeHead(200, {
+        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Content-Disposition": `attachment; filename="sbm-audit-history-${date}.xlsx"`,
         "Content-Length": workbook.length,
         "Cache-Control": "no-store",
       });
@@ -232,6 +261,42 @@ function authErrorResponse(error) {
     };
   }
   return null;
+}
+
+function auditWorkbookRows(audits) {
+  return audits.flatMap((entry) => {
+    const changes = Object.entries(entry.change || {});
+    const base = [
+      entry.id,
+      formatAuditTimestamp(entry.createdAt),
+      entry.changedBy || "system",
+      entry.personId,
+      entry.name,
+      entry.badgeNo,
+    ];
+
+    if (!changes.length) return [[...base, "", "", ""]];
+
+    return changes.map(([field, values]) => [
+      ...base,
+      field,
+      auditCellValue(values?.old),
+      auditCellValue(values?.new),
+    ]);
+  });
+}
+
+function formatAuditTimestamp(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toISOString();
+}
+
+function auditCellValue(value) {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
 }
 
 function readJson(req) {
