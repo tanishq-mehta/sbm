@@ -696,7 +696,12 @@ function PersonPage({ id, token }) {
     setNotice("");
     setError("");
     const displayName = displayFullName(formData) || person?.fullName || "this person";
-    if (!window.confirm(`Save changes for ${displayName}?`)) return;
+    const verificationStatus = String(formData["Verification Status"] || "").trim().toLowerCase();
+    const confirmationMessage =
+      verificationStatus === "" || verificationStatus === "none"
+        ? `Verification status is not set for ${displayName}.\n\nClick OK to save anyway.`
+        : `Save changes for ${displayName}?`;
+    if (!window.confirm(confirmationMessage)) return;
 
     setSaving(true);
     try {
