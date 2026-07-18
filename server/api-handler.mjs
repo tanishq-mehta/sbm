@@ -1,6 +1,7 @@
 import {
   checkDatabaseConnection,
   databaseProvider,
+  deletePerson,
   dropdownOptions,
   fields,
   getPerson,
@@ -10,6 +11,7 @@ import {
   listAllAuditLogs,
   listAllPeople,
   listPeople,
+  restorePersonFromAudit,
   searchableFields,
   updatePerson,
 } from "./database.mjs";
@@ -121,6 +123,7 @@ export async function handleApiRequest(req, res) {
         sheetName: "Audit History",
         headers: [
           "Audit ID",
+          "Action",
           "Changed At",
           "Changed By",
           "Record ID",
@@ -157,6 +160,19 @@ export async function handleApiRequest(req, res) {
       return;
     }
 
+    const restoreMatch = url.pathname.match(/^\/api\/audits\/(\d+)\/restore$/);
+    if (restoreMatch && req.method === "POST") {
+      const person = await restorePersonFromAudit(restoreMatch[1], {
+        changedBy: authenticatedUser.username,
+      });
+      if (!person) {
+        sendJson(res, 404, { message: "Audit entry not found." });
+        return;
+      }
+      sendJson(res, 200, { person });
+      return;
+    }
+
     if (url.pathname === "/api/people" && req.method === "GET") {
       const query = url.searchParams.get("q") || "";
       const field = url.searchParams.get("field") || "All fields";
@@ -189,9 +205,25 @@ export async function handleApiRequest(req, res) {
       return;
     }
 
+    if (personMatch && req.method === "DELETE") {
+      const person = await deletePerson(personMatch[1], {
+        changedBy: authenticatedUser.username,
+      });
+      if (!person) {
+        sendJson(res, 404, { message: "Person not found." });
+        return;
+      }
+      sendJson(res, 200, { deleted: true, person });
+      return;
+    }
+
     sendJson(res, 404, { message: "API route not found." });
   } catch (error) {
     console.error(error);
+    if (error?.statusCode) {
+      sendJson(res, error.statusCode, { message: error.message });
+      return;
+    }
     const authResponse = authErrorResponse(error);
     if (authResponse) {
       sendJson(res, 500, authResponse);
@@ -244,7 +276,7 @@ function getAuthenticatedUser(req) {
 function applyCors(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
 }
 
 function sendJson(res, status, payload) {
@@ -268,6 +300,7 @@ function auditWorkbookRows(audits) {
     const changes = Object.entries(entry.change || {});
     const base = [
       entry.id,
+      entry.action || "update",
       formatAuditTimestamp(entry.createdAt),
       entry.changedBy || "system",
       entry.personId,

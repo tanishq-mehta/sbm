@@ -265,22 +265,12 @@ export async function listAuditLogs({ limit = 500 } = {}) {
     databaseProvider === "postgres"
       ? (
           await getPool().query(
-            `
-              SELECT id, person_id, name, badge_no, changed_by, "change", created_at
-              FROM audit_logs
-              ORDER BY created_at DESC, id DESC
-              LIMIT $1
-            `,
+            auditLogSelectSql("", "LIMIT $1"),
             [max]
           )
         ).rows
       : getSqlite()
-          .prepare(`
-            SELECT id, person_id, name, badge_no, changed_by, "change", created_at
-            FROM audit_logs
-            ORDER BY created_at DESC, id DESC
-            LIMIT ?
-          `)
+          .prepare(auditLogSelectSql("", "LIMIT ?"))
           .all(max);
 
   return rows.map(rowToAuditLog);
@@ -290,19 +280,9 @@ export async function listAllAuditLogs() {
   await initializeDatabase();
   const rows =
     databaseProvider === "postgres"
-      ? (
-          await getPool().query(`
-            SELECT id, person_id, name, badge_no, changed_by, "change", created_at
-            FROM audit_logs
-            ORDER BY created_at DESC, id DESC
-          `)
-        ).rows
+      ? (await getPool().query(auditLogSelectSql())).rows
       : getSqlite()
-          .prepare(`
-            SELECT id, person_id, name, badge_no, changed_by, "change", created_at
-            FROM audit_logs
-            ORDER BY created_at DESC, id DESC
-          `)
+          .prepare(auditLogSelectSql())
           .all();
 
   return rows.map(rowToAuditLog);
@@ -310,29 +290,55 @@ export async function listAllAuditLogs() {
 
 export async function getPerson(id) {
   await initializeDatabase();
+  const row = await getPersonRow(id);
+  return row ? rowToPerson(row) : null;
+}
 
-  const row =
+async function getPersonRow(id, { includeDeleted = false } = {}) {
+  const deletedFilter = includeDeleted ? "" : " AND deleted_at IS NULL";
+  return databaseProvider === "postgres"
+    ? (
+        await getPool().query(
+          `
+            SELECT id, full_name, badge_no, department, phone_number, data, updated_at, deleted_at
+            FROM people
+            WHERE id = $1${deletedFilter}
+          `,
+          [Number(id)]
+        )
+      ).rows[0]
+    : getSqlite()
+        .prepare(`
+          SELECT id, full_name, badge_no, department, phone_number, data, updated_at, deleted_at
+          FROM people
+          WHERE id = ?${deletedFilter}
+        `)
+        .get(Number(id));
+}
+
+async function getAuditLog(id) {
+  const rows =
     databaseProvider === "postgres"
       ? (
           await getPool().query(
-            "SELECT id, full_name, badge_no, department, phone_number, data, updated_at FROM people WHERE id = $1",
+            auditLogSelectSql("WHERE a.id = $1"),
             [Number(id)]
           )
-        ).rows[0]
+        ).rows
       : getSqlite()
-          .prepare("SELECT id, full_name, badge_no, department, phone_number, data, updated_at FROM people WHERE id = ?")
-          .get(Number(id));
+          .prepare(auditLogSelectSql("WHERE a.id = ?"))
+          .all(Number(id));
 
-  return row ? rowToPerson(row) : null;
+  return rows[0] ? rowToAuditLog(rows[0]) : null;
 }
 
 async function getAllPersonRows() {
   if (databaseProvider === "postgres") {
-    return (await getPool().query("SELECT id, full_name, badge_no, department, phone_number, data FROM people ORDER BY lower(full_name), full_name")).rows;
+    return (await getPool().query("SELECT id, full_name, badge_no, department, phone_number, data FROM people WHERE deleted_at IS NULL ORDER BY lower(full_name), full_name")).rows;
   }
 
   return getSqlite()
-    .prepare("SELECT id, full_name, badge_no, department, phone_number, data FROM people ORDER BY full_name COLLATE NOCASE")
+    .prepare("SELECT id, full_name, badge_no, department, phone_number, data FROM people WHERE deleted_at IS NULL ORDER BY full_name COLLATE NOCASE")
     .all();
 }
 
@@ -375,8 +381,8 @@ export async function updatePerson(id, incomingData, options = {}) {
       );
       await client.query(
         `
-          INSERT INTO audit_logs (person_id, name, badge_no, changed_by, "change")
-          VALUES ($1, $2, $3, $4, $5)
+          INSERT INTO audit_logs (person_id, name, badge_no, changed_by, action, "change")
+          VALUES ($1, $2, $3, $4, 'update', $5)
         `,
         [Number(id), summary.fullName, summary.badgeNo, changedBy, change]
       );
@@ -412,8 +418,8 @@ export async function updatePerson(id, incomingData, options = {}) {
         );
       db
         .prepare(`
-          INSERT INTO audit_logs (person_id, name, badge_no, changed_by, "change")
-          VALUES (?, ?, ?, ?, ?)
+          INSERT INTO audit_logs (person_id, name, badge_no, changed_by, action, "change")
+          VALUES (?, ?, ?, ?, 'update', ?)
         `)
         .run(Number(id), summary.fullName, summary.badgeNo, changedBy, JSON.stringify(change));
       db.exec("COMMIT");
@@ -424,6 +430,174 @@ export async function updatePerson(id, incomingData, options = {}) {
   }
 
   return getPerson(id);
+}
+
+export async function deletePerson(id, options = {}) {
+  await initializeDatabase();
+  const existing = await getPerson(id);
+  if (!existing) return null;
+
+  const changedBy = normalizeChangedBy(options.changedBy);
+  const change = diffData(existing.data, emptyData());
+
+  if (databaseProvider === "postgres") {
+    const client = await getPool().connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `
+          UPDATE people
+          SET deleted_at = NOW(),
+              updated_at = NOW()
+          WHERE id = $1
+            AND deleted_at IS NULL
+        `,
+        [Number(id)]
+      );
+      await client.query(
+        `
+          INSERT INTO audit_logs (person_id, name, badge_no, changed_by, action, "change")
+          VALUES ($1, $2, $3, $4, 'delete', $5)
+        `,
+        [Number(id), existing.fullName, existing.badgeNo, changedBy, change]
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  } else {
+    const db = getSqlite();
+    db.exec("BEGIN");
+    try {
+      db
+        .prepare(`
+          UPDATE people
+          SET deleted_at = CURRENT_TIMESTAMP,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+            AND deleted_at IS NULL
+        `)
+        .run(Number(id));
+      db
+        .prepare(`
+          INSERT INTO audit_logs (person_id, name, badge_no, changed_by, action, "change")
+          VALUES (?, ?, ?, ?, 'delete', ?)
+        `)
+        .run(Number(id), existing.fullName, existing.badgeNo, changedBy, JSON.stringify(change));
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  return existing;
+}
+
+export async function restorePersonFromAudit(auditId, options = {}) {
+  await initializeDatabase();
+  const audit = await getAuditLog(auditId);
+  if (!audit) return null;
+  if (audit.action !== "delete") {
+    throw statusError(400, "Only deleted records can be restored.");
+  }
+  if (!audit.restorable) {
+    throw statusError(409, "This deleted record has already been restored.");
+  }
+
+  const existingRow = await getPersonRow(audit.personId, { includeDeleted: true });
+  if (!existingRow) {
+    throw statusError(409, "The original deleted record is no longer available to restore.");
+  }
+
+  const existing = rowToPerson(existingRow);
+  const data = dataFromAuditSnapshot(audit.change, existing.data);
+  const summary = summarize(data);
+  const change = diffData(emptyData(), data);
+  const changedBy = normalizeChangedBy(options.changedBy);
+
+  if (databaseProvider === "postgres") {
+    const client = await getPool().connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `
+          UPDATE people
+          SET full_name = $1,
+              badge_no = $2,
+              department = $3,
+              phone_number = $4,
+              data = $5,
+              deleted_at = NULL,
+              updated_at = NOW()
+          WHERE id = $6
+            AND deleted_at IS NOT NULL
+        `,
+        [
+          summary.fullName,
+          summary.badgeNo,
+          summary.department,
+          summary.phoneNumber,
+          data,
+          audit.personId,
+        ]
+      );
+      await client.query(
+        `
+          INSERT INTO audit_logs (person_id, name, badge_no, changed_by, action, "change")
+          VALUES ($1, $2, $3, $4, 'restore', $5)
+        `,
+        [audit.personId, summary.fullName, summary.badgeNo, changedBy, change]
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  } else {
+    const db = getSqlite();
+    db.exec("BEGIN");
+    try {
+      db
+        .prepare(`
+          UPDATE people
+          SET full_name = ?,
+              badge_no = ?,
+              department = ?,
+              phone_number = ?,
+              data = ?,
+              deleted_at = NULL,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+            AND deleted_at IS NOT NULL
+        `)
+        .run(
+          summary.fullName,
+          summary.badgeNo,
+          summary.department,
+          summary.phoneNumber,
+          JSON.stringify(data),
+          audit.personId
+        );
+      db
+        .prepare(`
+          INSERT INTO audit_logs (person_id, name, badge_no, changed_by, action, "change")
+          VALUES (?, ?, ?, ?, 'restore', ?)
+        `)
+        .run(audit.personId, summary.fullName, summary.badgeNo, changedBy, JSON.stringify(change));
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  return getPerson(audit.personId);
 }
 
 function getSqlite() {
@@ -459,10 +633,11 @@ function migrateSqlite() {
       phone_number TEXT,
       data TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      deleted_at TEXT
     )
   `);
-  const columns = db.prepare("PRAGMA table_info(people)").all().map((column) => column.name);
+  let columns = db.prepare("PRAGMA table_info(people)").all().map((column) => column.name);
   if (columns.includes("team")) {
     db.exec("BEGIN");
     try {
@@ -475,7 +650,8 @@ function migrateSqlite() {
           phone_number TEXT,
           data TEXT NOT NULL,
           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          deleted_at TEXT
         )
       `);
       db.exec(`
@@ -487,7 +663,8 @@ function migrateSqlite() {
           phone_number,
           data,
           created_at,
-          updated_at
+          updated_at,
+          deleted_at
         )
         SELECT
           id,
@@ -497,7 +674,8 @@ function migrateSqlite() {
           phone_number,
           data,
           created_at,
-          updated_at
+          updated_at,
+          NULL
         FROM people
       `);
       db.exec("DROP TABLE people");
@@ -508,9 +686,14 @@ function migrateSqlite() {
       throw error;
     }
   }
+  columns = db.prepare("PRAGMA table_info(people)").all().map((column) => column.name);
+  if (!columns.includes("deleted_at")) {
+    db.exec("ALTER TABLE people ADD COLUMN deleted_at TEXT");
+  }
   db.exec("CREATE INDEX IF NOT EXISTS idx_people_name ON people(full_name)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_people_badge ON people(badge_no)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_people_phone ON people(phone_number)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_people_deleted_at ON people(deleted_at)");
   db.exec(`
     CREATE TABLE IF NOT EXISTS audit_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -518,6 +701,7 @@ function migrateSqlite() {
       name TEXT NOT NULL,
       badge_no TEXT,
       changed_by TEXT NOT NULL DEFAULT 'system',
+      action TEXT NOT NULL DEFAULT 'update',
       "change" TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
@@ -525,6 +709,9 @@ function migrateSqlite() {
   const auditColumns = db.prepare("PRAGMA table_info(audit_logs)").all().map((column) => column.name);
   if (!auditColumns.includes("changed_by")) {
     db.exec("ALTER TABLE audit_logs ADD COLUMN changed_by TEXT NOT NULL DEFAULT 'system'");
+  }
+  if (!auditColumns.includes("action")) {
+    db.exec("ALTER TABLE audit_logs ADD COLUMN action TEXT NOT NULL DEFAULT 'update'");
   }
   db.exec("CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_audit_logs_person_id ON audit_logs(person_id)");
@@ -541,14 +728,17 @@ async function migratePostgres() {
       phone_number TEXT,
       data JSONB NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      deleted_at TIMESTAMPTZ
     )
   `);
   await pool.query("ALTER TABLE people DROP COLUMN IF EXISTS team");
+  await pool.query("ALTER TABLE people ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_people_name ON people (lower(full_name))");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_people_badge ON people (lower(badge_no))");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_people_phone ON people (phone_number)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_people_data ON people USING GIN (data)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_people_deleted_at ON people (deleted_at)");
   await pool.query(`
     CREATE TABLE IF NOT EXISTS audit_logs (
       id BIGSERIAL PRIMARY KEY,
@@ -556,11 +746,13 @@ async function migratePostgres() {
       name TEXT NOT NULL,
       badge_no TEXT,
       changed_by TEXT NOT NULL DEFAULT 'system',
+      action TEXT NOT NULL DEFAULT 'update',
       "change" JSONB NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
   await pool.query("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS changed_by TEXT NOT NULL DEFAULT 'system'");
+  await pool.query("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS action TEXT NOT NULL DEFAULT 'update'");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs (created_at DESC)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_audit_logs_person_id ON audit_logs (person_id)");
 }
@@ -756,6 +948,22 @@ function summarize(data) {
   };
 }
 
+function emptyData() {
+  return Object.fromEntries(fields.map((field) => [field, ""]));
+}
+
+function dataFromAuditSnapshot(change, fallbackData = {}) {
+  const data = {};
+  for (const field of fields) {
+    const fieldChange = change?.[field];
+    data[field] =
+      fieldChange && Object.hasOwn(fieldChange, "old")
+        ? fieldChange.old
+        : fallbackData[field] || "";
+  }
+  return cleanData(data);
+}
+
 function rowToPerson(row) {
   return {
     id: Number(row.id),
@@ -764,6 +972,7 @@ function rowToPerson(row) {
     department: row.department || "",
     phoneNumber: row.phone_number || "",
     updatedAt: row.updated_at || "",
+    deletedAt: row.deleted_at || "",
     data: typeof row.data === "string" ? JSON.parse(row.data) : row.data,
   };
 }
@@ -775,13 +984,54 @@ function rowToAuditLog(row) {
     name: row.name || "",
     badgeNo: row.badge_no || "",
     changedBy: row.changed_by || "system",
+    action: row.action || "update",
     change: typeof row.change === "string" ? JSON.parse(row.change) : row.change,
     createdAt: row.created_at || "",
+    restorable: Boolean(row.restorable),
   };
+}
+
+function auditLogSelectSql(whereClause = "", limitClause = "") {
+  return `
+    SELECT
+      a.id,
+      a.person_id,
+      a.name,
+      a.badge_no,
+      a.changed_by,
+      a.action,
+      a."change",
+      a.created_at,
+      CASE
+        WHEN a.action = 'delete'
+          AND p.deleted_at IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1
+            FROM audit_logs AS newer
+            WHERE newer.person_id = a.person_id
+              AND newer.action IN ('delete', 'restore')
+              AND (
+                newer.created_at > a.created_at
+                OR (newer.created_at = a.created_at AND newer.id > a.id)
+              )
+          )
+        THEN TRUE
+        ELSE FALSE
+      END AS restorable
+    FROM audit_logs AS a
+    LEFT JOIN people AS p ON p.id = a.person_id
+    ${whereClause}
+    ORDER BY a.created_at DESC, a.id DESC
+    ${limitClause}
+  `;
 }
 
 function normalizeChangedBy(value) {
   return String(value || "system").trim() || "system";
+}
+
+function statusError(statusCode, message) {
+  return Object.assign(new Error(message), { statusCode });
 }
 
 function toSummary(person) {

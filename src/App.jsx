@@ -366,6 +366,7 @@ function AuditPage({ token }) {
   const [audits, setAudits] = useState([]);
   const [loading, setLoading] = useState(true);
   const [downloading, setDownloading] = useState(false);
+  const [restoringId, setRestoringId] = useState(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -386,6 +387,11 @@ function AuditPage({ token }) {
       cancelled = true;
     };
   }, [token]);
+
+  async function reloadAudits() {
+    const payload = await apiFetch("/api/audits?limit=1000", { token });
+    setAudits(payload.results || []);
+  }
 
   async function downloadAuditExcel() {
     setDownloading(true);
@@ -414,6 +420,25 @@ function AuditPage({ token }) {
       setError(err.message);
     } finally {
       setDownloading(false);
+    }
+  }
+
+  async function restoreAuditEntry(entry) {
+    const displayName = entry.name || "this deleted record";
+    if (!window.confirm(`Restore ${displayName}?`)) return;
+
+    setRestoringId(entry.id);
+    setError("");
+    try {
+      await apiFetch(`/api/audits/${entry.id}/restore`, {
+        method: "POST",
+        token,
+      });
+      await reloadAudits();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setRestoringId(null);
     }
   }
 
@@ -449,13 +474,30 @@ function AuditPage({ token }) {
             <article className="audit-entry" key={entry.id}>
               <header className="audit-entry-header">
                 <div>
-                  <h2>{entry.name || "Unnamed user"}</h2>
+                  <div className="audit-title-line">
+                    <h2>{entry.name || "Unnamed user"}</h2>
+                    <span className={`audit-action ${entry.action || "update"}`}>
+                      {auditActionLabel(entry.action)}
+                    </span>
+                  </div>
                   <p>
                     Badge {entry.badgeNo || "-"} · Record #{entry.personId} · Changes done by:{" "}
                     {entry.changedBy || "system"}
                   </p>
                 </div>
-                <time>{formatDateTime(entry.createdAt)}</time>
+                <div className="audit-entry-tools">
+                  {entry.restorable ? (
+                    <button
+                      type="button"
+                      className="secondary-button compact"
+                      onClick={() => restoreAuditEntry(entry)}
+                      disabled={restoringId === entry.id}
+                    >
+                      {restoringId === entry.id ? "Restoring..." : "Restore"}
+                    </button>
+                  ) : null}
+                  <time>{formatDateTime(entry.createdAt)}</time>
+                </div>
               </header>
               <div className="audit-change-list">
                 {Object.entries(entry.change || {}).map(([field, values]) => (
@@ -615,6 +657,7 @@ function PersonPage({ id, token }) {
   const [formData, setFormData] = useState({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
@@ -672,6 +715,26 @@ function PersonPage({ id, token }) {
     }
   }
 
+  async function deleteEntry() {
+    setNotice("");
+    setError("");
+    const displayName = displayFullName(formData) || person?.fullName || "this person";
+    if (!window.confirm(`Delete ${displayName}? This will remove the entry from search and exports.`)) return;
+
+    setDeleting(true);
+    try {
+      await apiFetch(`/api/people/${id}`, {
+        method: "DELETE",
+        token,
+      });
+      window.location.hash = "#/home";
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   if (loading) {
     return (
       <main className="page">
@@ -705,6 +768,14 @@ function PersonPage({ id, token }) {
             {formData["Sewa Dept - Local Centre"] || formData["Sewa Dept - Major Centre"] || "-"}
           </p>
         </div>
+        <button
+          type="button"
+          className="danger-button record-delete-button"
+          onClick={deleteEntry}
+          disabled={saving || deleting}
+        >
+          {deleting ? "Deleting..." : "Delete entry"}
+        </button>
       </section>
 
       <form onSubmit={save} className="record-form">
@@ -732,7 +803,7 @@ function PersonPage({ id, token }) {
           <button type="button" className="secondary-button" onClick={() => (window.location.hash = "#/home")}>
             Cancel
           </button>
-          <button type="submit" className="primary-button" disabled={saving}>
+          <button type="submit" className="primary-button" disabled={saving || deleting}>
             {saving ? "Saving..." : "Save changes"}
           </button>
         </div>
@@ -936,6 +1007,12 @@ function barPercent(value, rows) {
 
 function displayAuditValue(value) {
   return value === "" || value === null || value === undefined ? "(blank)" : String(value);
+}
+
+function auditActionLabel(action) {
+  if (action === "delete") return "Deleted";
+  if (action === "restore") return "Restored";
+  return "Updated";
 }
 
 function formatDateTime(value) {

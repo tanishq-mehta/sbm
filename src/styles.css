@@ -161,7 +161,8 @@ textarea:focus {
 }
 
 .primary-button,
-.secondary-button {
+.secondary-button,
+.danger-button {
   min-height: 42px;
   border-radius: 6px;
   border: 1px solid transparent;
@@ -180,7 +181,8 @@ textarea:focus {
 }
 
 .primary-button:disabled,
-.secondary-button:disabled {
+.secondary-button:disabled,
+.danger-button:disabled {
   cursor: not-allowed;
   opacity: 0.7;
 }
@@ -193,6 +195,15 @@ textarea:focus {
 
 .secondary-button:hover {
   border-color: #9eb5ad;
+}
+
+.danger-button {
+  background: #ba342a;
+  color: #ffffff;
+}
+
+.danger-button:hover {
+  background: #9e2b24;
 }
 
 .compact {
@@ -514,6 +525,13 @@ tbody tr:focus {
   padding: 15px 16px;
 }
 
+.audit-title-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .audit-entry-header h2 {
   margin: 0 0 4px;
 }
@@ -528,6 +546,31 @@ tbody tr:focus {
 
 .audit-entry-header time {
   white-space: nowrap;
+}
+
+.audit-entry-tools {
+  display: grid;
+  justify-items: end;
+  gap: 8px;
+}
+
+.audit-action {
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: #edf1ef;
+  color: #526360;
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.audit-action.delete {
+  background: #fff0ed;
+  color: #a83629;
+}
+
+.audit-action.restore {
+  background: #ecf7f2;
+  color: #1d604e;
 }
 
 .audit-change-list {
@@ -579,6 +622,10 @@ tbody tr:focus {
 .record-header p:last-child {
   margin: 7px 0 0;
   color: #637370;
+}
+
+.record-delete-button {
+  margin-left: auto;
 }
 
 .record-form fieldset {
@@ -681,6 +728,15 @@ tbody tr:focus {
 
   .audit-entry-header time {
     white-space: normal;
+  }
+
+  .audit-entry-tools {
+    justify-items: start;
+  }
+
+  .record-delete-button {
+    margin-left: 0;
+    justify-self: start;
   }
 
   .bar-row strong {
