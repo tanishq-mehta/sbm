@@ -26,6 +26,7 @@ const emailField = "Email Id";
 const verificationField = "Verification Status";
 const verificationOptions = ["None", "Verification Done", "Rectification Done"];
 const dateFields = new Set(["Birth Date", "Initiation Date"]);
+const departmentFields = new Set(["Sewa Dept - Local Centre", "Sewa Dept - Major Centre"]);
 const monthNames = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
 
 let sqliteDb;
@@ -208,6 +209,129 @@ export async function normalizeVerificationValues() {
     throw error;
   }
   return updated;
+}
+
+export async function normalizeDepartmentValues(options = {}) {
+  await initializeDatabase({ seedIfEmpty: false });
+  const changedBy = normalizeChangedBy(options.changedBy || "system-department-normalization");
+
+  if (databaseProvider === "postgres") {
+    const rows = (
+      await getPool().query(
+        "SELECT id, full_name, badge_no, department, phone_number, data, updated_at, deleted_at FROM people"
+      )
+    ).rows;
+    const updates = rows
+      .map((row) => rowToPerson(row))
+      .map((person) => {
+        const data = normalizedDepartmentData(person.data || {});
+        const change = diffData(person.data, data);
+        return Object.keys(change).length ? { person, data, change, summary: summarize(data) } : null;
+      })
+      .filter(Boolean);
+
+    const client = await getPool().connect();
+    try {
+      await client.query("BEGIN");
+      for (const update of updates) {
+        await client.query(
+          `
+            UPDATE people
+            SET full_name = $1,
+                badge_no = $2,
+                department = $3,
+                phone_number = $4,
+                data = $5,
+                updated_at = NOW()
+            WHERE id = $6
+          `,
+          [
+            update.summary.fullName,
+            update.summary.badgeNo,
+            update.summary.department,
+            update.summary.phoneNumber,
+            update.data,
+            update.person.id,
+          ]
+        );
+        await client.query(
+          `
+            INSERT INTO audit_logs (person_id, name, badge_no, changed_by, action, "change")
+            VALUES ($1, $2, $3, $4, 'update', $5)
+          `,
+          [
+            update.person.id,
+            update.summary.fullName,
+            update.summary.badgeNo,
+            changedBy,
+            update.change,
+          ]
+        );
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    return updates.length;
+  }
+
+  const db = getSqlite();
+  const rows = db
+    .prepare("SELECT id, full_name, badge_no, department, phone_number, data, updated_at, deleted_at FROM people")
+    .all();
+  const updates = rows
+    .map((row) => rowToPerson(row))
+    .map((person) => {
+      const data = normalizedDepartmentData(person.data || {});
+      const change = diffData(person.data, data);
+      return Object.keys(change).length ? { person, data, change, summary: summarize(data) } : null;
+    })
+    .filter(Boolean);
+  const updatePersonRecord = db.prepare(`
+    UPDATE people
+    SET full_name = ?,
+        badge_no = ?,
+        department = ?,
+        phone_number = ?,
+        data = ?,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `);
+  const insertAudit = db.prepare(`
+    INSERT INTO audit_logs (person_id, name, badge_no, changed_by, action, "change")
+    VALUES (?, ?, ?, ?, 'update', ?)
+  `);
+
+  db.exec("BEGIN");
+  try {
+    for (const update of updates) {
+      updatePersonRecord.run(
+        update.summary.fullName,
+        update.summary.badgeNo,
+        update.summary.department,
+        update.summary.phoneNumber,
+        JSON.stringify(update.data),
+        update.person.id
+      );
+      insertAudit.run(
+        update.person.id,
+        update.summary.fullName,
+        update.summary.badgeNo,
+        changedBy,
+        JSON.stringify(update.change)
+      );
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+
+  return updates.length;
 }
 
 export async function listPeople({ query = "", field = "All fields", limit = 200 } = {}) {
@@ -772,12 +896,14 @@ function seedSqlite() {
   getSqlite().exec("BEGIN");
   try {
     for (const person of people) {
+      const data = cleanData(person.data || {});
+      const summary = summarize(data);
       insert.run(
-        person.fullName || "",
-        person.badgeNo || "",
-        person.department || "",
-        person.phoneNumber || "",
-        JSON.stringify(cleanData(person.data || {}))
+        summary.fullName || person.fullName || "",
+        summary.badgeNo || person.badgeNo || "",
+        summary.department || person.department || "",
+        summary.phoneNumber || person.phoneNumber || "",
+        JSON.stringify(data)
       );
     }
     getSqlite().exec("COMMIT");
@@ -798,13 +924,15 @@ async function seedPostgres() {
       const batch = people.slice(start, start + batchSize);
       const values = [];
       const placeholders = batch.map((person, index) => {
+        const data = cleanData(person.data || {});
+        const summary = summarize(data);
         const offset = index * 5;
         values.push(
-          person.fullName || "",
-          person.badgeNo || "",
-          person.department || "",
-          person.phoneNumber || "",
-          cleanData(person.data || {})
+          summary.fullName || person.fullName || "",
+          summary.badgeNo || person.badgeNo || "",
+          summary.department || person.department || "",
+          summary.phoneNumber || person.phoneNumber || "",
+          data
         );
         return `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}, $${offset + 5})`;
       });
@@ -843,6 +971,15 @@ function cleanData(data) {
   );
 }
 
+function normalizedDepartmentData(data) {
+  return cleanData({
+    ...data,
+    ...Object.fromEntries(
+      [...departmentFields].map((field) => [field, normalizeDepartmentValue(data?.[field])])
+    ),
+  });
+}
+
 function normalizeValue(value) {
   if (value === null || value === undefined) return "";
   return String(value).trim();
@@ -852,7 +989,40 @@ function normalizeFieldValue(field, value) {
   const normalized = normalizeValue(value);
   if (field === verificationField) return normalizeVerificationValue(normalized);
   if (dateFields.has(field)) return normalizeDateValue(normalized);
+  if (departmentFields.has(field)) return normalizeDepartmentValue(normalized);
   return field === emailField ? sanitizeEmailValue(normalized) : normalized;
+}
+
+export function normalizeDepartmentValue(value) {
+  const normalized = normalizeValue(value);
+  const compact = normalized.toLowerCase().replace(/[.\s_-]+/g, "");
+
+  if (["admin", "administration", "adminstration"].includes(compact)) {
+    return "Administration";
+  }
+  if (compact === "fr" || compact === "foreignersreception") {
+    return "Foreigners Reception";
+  }
+  if (compact === "mnt" || compact === "maintenance") {
+    return "Maintenance";
+  }
+  if (compact === "bav") {
+    return "BAV";
+  }
+  if (compact === "madical" || compact === "medical") {
+    return "MEDICAL";
+  }
+  if (compact === "sanitation") {
+    return "SANITATION";
+  }
+  if (compact === "sevacollection" || compact === "sewacollection") {
+    return "Sewa Collection";
+  }
+  if (compact === "sevasamiti" || compact === "sewasamiti") {
+    return "Sewa Samiti";
+  }
+
+  return normalized;
 }
 
 function normalizeDateValue(value) {

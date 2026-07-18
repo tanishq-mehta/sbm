@@ -22,6 +22,7 @@ INITIATION_BY_OPTIONS = [
     "Hazur Jasdeep Singh Ji",
 ]
 DATE_FIELDS = {"Birth Date", "Initiation Date"}
+DEPARTMENT_FIELDS = {"Sewa Dept - Local Centre", "Sewa Dept - Major Centre"}
 MONTH_NAMES = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
 
 
@@ -66,11 +67,35 @@ def normalize_field_value(field: str, value: object) -> str:
         return verification_value(value)
     if field in DATE_FIELDS:
         return date_value(value)
+    if field in DEPARTMENT_FIELDS:
+        return department_value(value)
     if field == "Email Id":
         normalized = re.sub(r"^\s*email\s*id\s*[:;\-]?\s*", "", normalized, flags=re.IGNORECASE)
         match = re.search(r"[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}", normalized, flags=re.IGNORECASE)
         if match:
             return match.group(0)
+    return normalized
+
+
+def department_value(value: object) -> str:
+    normalized = normalize_value(value)
+    compact = re.sub(r"[.\s_-]+", "", normalized.lower())
+    if compact in {"admin", "administration", "adminstration"}:
+        return "Administration"
+    if compact in {"fr", "foreignersreception"}:
+        return "Foreigners Reception"
+    if compact in {"mnt", "maintenance"}:
+        return "Maintenance"
+    if compact == "bav":
+        return "BAV"
+    if compact in {"madical", "medical"}:
+        return "MEDICAL"
+    if compact == "sanitation":
+        return "SANITATION"
+    if compact in {"sevacollection", "sewacollection"}:
+        return "Sewa Collection"
+    if compact in {"sevasamiti", "sewasamiti"}:
+        return "Sewa Samiti"
     return normalized
 
 
@@ -140,14 +165,14 @@ def format_date_parts(year: int, month: int, day: int) -> str:
     return f"{day}-{MONTH_NAMES[month - 1]}-{str(year)[-2:]}"
 
 
-def sheet_values(workbook: Path, sheet_name: str) -> list[str]:
+def sheet_values(workbook: Path, sheet_name: str, value_mapper=normalize_value) -> list[str]:
     frame = pd.read_excel(workbook, sheet_name=sheet_name, header=0, dtype=object)
     if frame.empty or len(frame.columns) < 2:
         return []
     values: list[str] = []
     seen: set[str] = set()
     for value in frame.iloc[:, 1].tolist():
-        normalized = normalize_value(value)
+        normalized = value_mapper(value)
         if not normalized or normalized.lower() in seen:
             continue
         seen.add(normalized.lower())
@@ -157,7 +182,7 @@ def sheet_values(workbook: Path, sheet_name: str) -> list[str]:
 
 def dropdown_options(workbook: Path) -> dict[str, list[str]]:
     skills = sheet_values(workbook, "Skills")
-    departments = sheet_values(workbook, "Seva Department")
+    departments = sheet_values(workbook, "Seva Department", department_value)
     return {
         "Verification Status": VERIFICATION_OPTIONS,
         "Skills - 1": skills,
