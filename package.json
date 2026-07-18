@@ -15,6 +15,7 @@
     "db:clean-emails": "node --no-warnings=ExperimentalWarning server/clean-emails.mjs",
     "db:normalize-verification": "node --no-warnings=ExperimentalWarning server/normalize-verification.mjs",
     "db:normalize-departments": "node --no-warnings=ExperimentalWarning server/normalize-departments.mjs",
+    "db:renumber-sno": "node --no-warnings=ExperimentalWarning server/renumber-sno.mjs",
     "import:excel": "python3 scripts/import_excel.py /Users/tmehta/Downloads/SBM.xlsx",
     "auth:user": "node scripts/create_auth_user.mjs",
     "auth:secret": "node scripts/create_auth_secret.mjs"

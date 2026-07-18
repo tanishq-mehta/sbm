@@ -8,6 +8,7 @@ const sections = [
   {
     title: "Identity",
     fields: [
+      "S No",
       "Badge no.",
       "First Name",
       "Middle Name",

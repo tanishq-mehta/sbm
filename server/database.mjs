@@ -23,6 +23,8 @@ export const dropdownOptions = fs.existsSync(dropdownOptionsPath)
   : {};
 export const databaseProvider = process.env.DATABASE_URL ? "postgres" : "sqlite";
 const emailField = "Email Id";
+const serialField = "S No";
+const badgeField = "Badge no.";
 const verificationField = "Verification Status";
 const verificationOptions = ["None", "Verification Done", "Rectification Done"];
 const dateFields = new Set(["Birth Date", "Initiation Date"]);
@@ -332,6 +334,114 @@ export async function normalizeDepartmentValues(options = {}) {
   }
 
   return updates.length;
+}
+
+export async function renumberSerialNumbers(options = {}) {
+  await initializeDatabase({ seedIfEmpty: false });
+  const batchSize = Math.max(1, Math.min(Number(options.batchSize) || 250, 1000));
+  const changedBy = normalizeChangedBy(options.changedBy || "system-sno-renumbering");
+  const people = (await getAllPersonRows())
+    .map(rowToPerson)
+    .sort(comparePeopleForSerialNumber);
+  const updates = people
+    .map((person, index) => {
+      const newSerial = String(index + 1);
+      const oldSerial = normalizeValue(person.data?.[serialField]);
+      if (oldSerial === newSerial) return null;
+
+      const data = cleanData({
+        ...person.data,
+        [serialField]: newSerial,
+      });
+      return {
+        person,
+        data,
+        summary: summarize(data),
+        change: {
+          [serialField]: {
+            old: oldSerial,
+            new: newSerial,
+          },
+        },
+      };
+    })
+    .filter(Boolean);
+
+  const result = {
+    total: people.length,
+    updated: updates.length,
+    batchSize,
+    first: people[0] ? serialPreview(people[0], 1) : null,
+    last: people.length ? serialPreview(people[people.length - 1], people.length) : null,
+  };
+
+  if (options.dryRun || updates.length === 0) {
+    return result;
+  }
+
+  if (databaseProvider === "postgres") {
+    const client = await getPool().connect();
+    try {
+      await client.query("BEGIN");
+      for (let start = 0; start < updates.length; start += batchSize) {
+        await applySerialNumberBatchPostgres(
+          client,
+          updates.slice(start, start + batchSize),
+          changedBy
+        );
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  } else {
+    const db = getSqlite();
+    const updatePersonRecord = db.prepare(`
+      UPDATE people
+      SET full_name = ?,
+          badge_no = ?,
+          department = ?,
+          phone_number = ?,
+          data = ?,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+        AND deleted_at IS NULL
+    `);
+    const insertAudit = db.prepare(`
+      INSERT INTO audit_logs (person_id, name, badge_no, changed_by, action, "change")
+      VALUES (?, ?, ?, ?, 'update', ?)
+    `);
+
+    db.exec("BEGIN");
+    try {
+      for (const update of updates) {
+        updatePersonRecord.run(
+          update.summary.fullName,
+          update.summary.badgeNo,
+          update.summary.department,
+          update.summary.phoneNumber,
+          JSON.stringify(update.data),
+          update.person.id
+        );
+        insertAudit.run(
+          update.person.id,
+          update.summary.fullName,
+          update.summary.badgeNo,
+          changedBy,
+          JSON.stringify(update.change)
+        );
+      }
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  return result;
 }
 
 export async function listPeople({ query = "", field = "All fields", limit = 200 } = {}) {
@@ -1205,6 +1315,84 @@ function normalizeChangedBy(value) {
 
 function statusError(statusCode, message) {
   return Object.assign(new Error(message), { statusCode });
+}
+
+async function applySerialNumberBatchPostgres(client, batch, changedBy) {
+  const values = [];
+  const placeholders = batch.map((update, index) => {
+    const offset = index * 7;
+    values.push(
+      update.person.id,
+      update.summary.fullName,
+      update.summary.badgeNo,
+      update.summary.department,
+      update.summary.phoneNumber,
+      update.data,
+      update.change
+    );
+    return `($${offset + 1}::bigint, $${offset + 2}::text, $${offset + 3}::text, $${offset + 4}::text, $${offset + 5}::text, $${offset + 6}::jsonb, $${offset + 7}::jsonb)`;
+  });
+  const changedByIndex = values.length + 1;
+  values.push(changedBy);
+
+  await client.query(
+    `
+      WITH updates(id, full_name, badge_no, department, phone_number, data, audit_change) AS (
+        VALUES ${placeholders.join(", ")}
+      ),
+      changed AS (
+        UPDATE people AS p
+        SET full_name = u.full_name,
+            badge_no = u.badge_no,
+            department = u.department,
+            phone_number = u.phone_number,
+            data = u.data,
+            updated_at = NOW()
+        FROM updates AS u
+        WHERE p.id = u.id
+          AND p.deleted_at IS NULL
+        RETURNING u.id, u.full_name, u.badge_no, u.audit_change
+      )
+      INSERT INTO audit_logs (person_id, name, badge_no, changed_by, action, "change")
+      SELECT id, full_name, badge_no, $${changedByIndex}, 'update', audit_change
+      FROM changed
+    `,
+    values
+  );
+}
+
+function comparePeopleForSerialNumber(a, b) {
+  const badgeA = normalizeValue(a.data?.[badgeField] || a.badgeNo);
+  const badgeB = normalizeValue(b.data?.[badgeField] || b.badgeNo);
+
+  if (badgeA && badgeB) {
+    const badgeCompare = badgeA.localeCompare(badgeB, "en", {
+      numeric: true,
+      sensitivity: "base",
+    });
+    if (badgeCompare !== 0) return badgeCompare;
+  } else if (badgeA) {
+    return -1;
+  } else if (badgeB) {
+    return 1;
+  }
+
+  const nameCompare = normalizeValue(a.fullName).localeCompare(normalizeValue(b.fullName), "en", {
+    numeric: true,
+    sensitivity: "base",
+  });
+  if (nameCompare !== 0) return nameCompare;
+
+  return a.id - b.id;
+}
+
+function serialPreview(person, serial) {
+  return {
+    id: person.id,
+    serial: String(serial),
+    badgeNo: normalizeValue(person.data?.[badgeField] || person.badgeNo),
+    name: person.fullName || "",
+  };
 }
 
 function toSummary(person) {
