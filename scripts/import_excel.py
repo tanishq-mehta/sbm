@@ -86,6 +86,8 @@ def department_value(value: object) -> str:
         return "Foreigners Reception"
     if compact in {"mnt", "maintenance"}:
         return "Maintenance"
+    if compact in {"hrt", "horticulture"}:
+        return "HORTICULTURE"
     if compact == "bav":
         return "BAV"
     if compact in {"madical", "medical"}:

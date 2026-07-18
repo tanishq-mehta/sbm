@@ -1006,6 +1006,9 @@ export function normalizeDepartmentValue(value) {
   if (compact === "mnt" || compact === "maintenance") {
     return "Maintenance";
   }
+  if (compact === "hrt" || compact === "horticulture") {
+    return "HORTICULTURE";
+  }
   if (compact === "bav") {
     return "BAV";
   }
