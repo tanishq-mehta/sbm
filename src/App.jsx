@@ -101,6 +101,8 @@ export default function App() {
         <AuditPage token={token} />
       ) : route.name === "summary" ? (
         <SummaryPage token={token} />
+      ) : route.name === "new-person" ? (
+        <PersonPage token={token} isNew />
       ) : route.name === "person" ? (
         <PersonPage id={route.id} token={token} />
       ) : (
@@ -274,13 +276,16 @@ function HomePage({ token }) {
           <h1>Find and update user data</h1>
         </div>
         <div className="page-actions">
+          <button className="primary-button" onClick={() => (window.location.hash = "#/people/new")}>
+            Create new user
+          </button>
           <button className="secondary-button" onClick={() => (window.location.hash = "#/summary")}>
             Summary
           </button>
           <button className="secondary-button" onClick={() => (window.location.hash = "#/audit")}>
             Audit history
           </button>
-          <button className="primary-button" onClick={downloadExcel} disabled={downloading}>
+          <button className="secondary-button" onClick={downloadExcel} disabled={downloading}>
             {downloading ? "Preparing..." : "Download latest Excel"}
           </button>
           <p className="record-count">{fields.length} fields available</p>
@@ -651,7 +656,7 @@ function SummaryPage({ token }) {
   );
 }
 
-function PersonPage({ id, token }) {
+function PersonPage({ id, token, isNew = false }) {
   const [person, setPerson] = useState(null);
   const [fields, setFields] = useState([]);
   const [dropdownOptions, setDropdownOptions] = useState({});
@@ -664,16 +669,26 @@ function PersonPage({ id, token }) {
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([
-      apiFetch("/api/fields", { token }),
-      apiFetch(`/api/people/${id}`, { token }),
-    ])
+    const requests = isNew
+      ? [apiFetch("/api/fields", { token })]
+      : [
+          apiFetch("/api/fields", { token }),
+          apiFetch(`/api/people/${id}`, { token }),
+        ];
+
+    Promise.all(requests)
       .then(([fieldPayload, personPayload]) => {
         if (cancelled) return;
-        setFields(fieldPayload.fields || []);
+        const nextFields = fieldPayload.fields || [];
+        setFields(nextFields);
         setDropdownOptions(fieldPayload.dropdownOptions || {});
-        setPerson(personPayload);
-        setFormData(personPayload.data || {});
+        if (isNew) {
+          setPerson(null);
+          setFormData(blankFormData(nextFields));
+        } else {
+          setPerson(personPayload);
+          setFormData(personPayload.data || {});
+        }
       })
       .catch((err) => {
         if (!cancelled) setError(err.message);
@@ -684,7 +699,7 @@ function PersonPage({ id, token }) {
     return () => {
       cancelled = true;
     };
-  }, [id, token]);
+  }, [id, isNew, token]);
 
   const groupedSections = useMemo(() => buildSections(fields), [fields]);
 
@@ -700,14 +715,16 @@ function PersonPage({ id, token }) {
     const verificationStatus = String(formData["Verification Status"] || "").trim().toLowerCase();
     const confirmationMessage =
       verificationStatus === "" || verificationStatus === "none"
-        ? `Verification status is not set for ${displayName}.\n\nClick OK to save anyway.`
-        : `Save changes for ${displayName}?`;
+        ? `Verification status is not set for ${displayName}.\n\nClick OK to ${isNew ? "create this user" : "save anyway"}.`
+        : isNew
+          ? `Create new user ${displayName}?`
+          : `Save changes for ${displayName}?`;
     if (!window.confirm(confirmationMessage)) return;
 
     setSaving(true);
     try {
-      const updated = await apiFetch(`/api/people/${id}`, {
-        method: "PUT",
+      const updated = await apiFetch(isNew ? "/api/people" : `/api/people/${id}`, {
+        method: isNew ? "POST" : "PUT",
         token,
         body: JSON.stringify({ data: formData }),
       });
@@ -749,7 +766,7 @@ function PersonPage({ id, token }) {
     );
   }
 
-  if (error && !person) {
+  if (error && !person && !isNew) {
     return (
       <main className="page">
         <button className="secondary-button" onClick={() => (window.location.hash = "#/home")}>
@@ -768,20 +785,26 @@ function PersonPage({ id, token }) {
         </button>
         <div>
           <p className="eyebrow">Directory record</p>
-          <h1>{displayFullName(formData) || "User record"}</h1>
-          <p>
-            Badge {formData["Badge no."] || "-"} · Department{" "}
-            {formData["Sewa Dept - Local Centre"] || formData["Sewa Dept - Major Centre"] || "-"}
-          </p>
+          <h1>{displayFullName(formData) || (isNew ? "Create new user" : "User record")}</h1>
+          {isNew ? (
+            <p>S No will be assigned automatically when this user is saved.</p>
+          ) : (
+            <p>
+              Badge {formData["Badge no."] || "-"} · Department{" "}
+              {formData["Sewa Dept - Local Centre"] || formData["Sewa Dept - Major Centre"] || "-"}
+            </p>
+          )}
         </div>
-        <button
-          type="button"
-          className="danger-button record-delete-button"
-          onClick={deleteEntry}
-          disabled={saving || deleting}
-        >
-          {deleting ? "Deleting..." : "Delete entry"}
-        </button>
+        {!isNew ? (
+          <button
+            type="button"
+            className="danger-button record-delete-button"
+            onClick={deleteEntry}
+            disabled={saving || deleting}
+          >
+            {deleting ? "Deleting..." : "Delete entry"}
+          </button>
+        ) : null}
       </section>
 
       <form onSubmit={save} className="record-form">
@@ -795,6 +818,8 @@ function PersonPage({ id, token }) {
                   field={field}
                   value={formData[field] || ""}
                   options={dropdownOptions[field] || []}
+                  readOnly={field === "S No"}
+                  placeholder={field === "S No" ? "Assigned automatically" : ""}
                   onChange={(value) => updateField(field, value)}
                 />
               ))}
@@ -810,7 +835,7 @@ function PersonPage({ id, token }) {
             Cancel
           </button>
           <button type="submit" className="primary-button" disabled={saving || deleting}>
-            {saving ? "Saving..." : "Save changes"}
+            {saving ? (isNew ? "Creating..." : "Saving...") : isNew ? "Create user" : "Save changes"}
           </button>
         </div>
       </form>
@@ -818,7 +843,7 @@ function PersonPage({ id, token }) {
   );
 }
 
-function FieldControl({ field, value, options = [], onChange }) {
+function FieldControl({ field, value, options = [], readOnly = false, placeholder = "", onChange }) {
   const multiline = [
     "Address Line 1",
     "Address Line 2",
@@ -836,7 +861,14 @@ function FieldControl({ field, value, options = [], onChange }) {
   return (
     <label className={multiline ? "span-2" : ""}>
       <span>{field}</span>
-      {isDateField ? (
+      {readOnly ? (
+        <input
+          type="text"
+          value={value}
+          placeholder={placeholder}
+          readOnly
+        />
+      ) : isDateField ? (
         <div className="date-field">
           <input
             type="text"
@@ -899,6 +931,7 @@ async function apiFetch(path, { token, method = "GET", body } = {}) {
 
 function readRoute() {
   const hash = window.location.hash || "#/home";
+  if (hash === "#/people/new") return { name: "new-person" };
   const personMatch = hash.match(/^#\/people\/(\d+)$/);
   if (personMatch) return { name: "person", id: personMatch[1] };
   if (hash === "#/audit") return { name: "audit" };
@@ -917,6 +950,12 @@ function buildSections(fields) {
   const remaining = fields.filter((field) => !used.has(field));
   if (remaining.length) result.push({ title: "Other", fields: remaining });
   return result;
+}
+
+function blankFormData(fields) {
+  const data = Object.fromEntries(fields.map((field) => [field, ""]));
+  if (fields.includes("Verification Status")) data["Verification Status"] = "None";
+  return data;
 }
 
 function inputType(field) {
@@ -1016,6 +1055,7 @@ function displayAuditValue(value) {
 }
 
 function auditActionLabel(action) {
+  if (action === "create") return "Created";
   if (action === "delete") return "Deleted";
   if (action === "restore") return "Restored";
   return "Updated";

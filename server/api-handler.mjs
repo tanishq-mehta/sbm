@@ -1,5 +1,6 @@
 import {
   checkDatabaseConnection,
+  createPerson,
   databaseProvider,
   deletePerson,
   dropdownOptions,
@@ -178,6 +179,15 @@ export async function handleApiRequest(req, res) {
       const field = url.searchParams.get("field") || "All fields";
       const limit = url.searchParams.get("limit") || "200";
       sendJson(res, 200, await listPeople({ query, field, limit }));
+      return;
+    }
+
+    if (url.pathname === "/api/people" && req.method === "POST") {
+      const body = await readJson(req);
+      const person = await createPerson(body.data || {}, {
+        changedBy: authenticatedUser.username,
+      });
+      sendJson(res, 201, person);
       return;
     }
 

@@ -154,6 +154,13 @@ textarea:focus {
   box-shadow: 0 0 0 3px rgba(35, 117, 94, 0.16);
 }
 
+input[readonly],
+textarea[readonly] {
+  background: #f7faf8;
+  color: #526360;
+  cursor: not-allowed;
+}
+
 .combo-field {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(130px, 190px);
@@ -566,6 +573,11 @@ tbody tr:focus {
 .audit-action.delete {
   background: #fff0ed;
   color: #a83629;
+}
+
+.audit-action.create {
+  background: #e8f5ef;
+  color: #1c604d;
 }
 
 .audit-action.restore {

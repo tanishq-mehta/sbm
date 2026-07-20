@@ -522,6 +522,99 @@ export async function listAllAuditLogs() {
   return rows.map(rowToAuditLog);
 }
 
+export async function createPerson(incomingData, options = {}) {
+  await initializeDatabase();
+  const changedBy = normalizeChangedBy(options.changedBy);
+
+  if (databaseProvider === "postgres") {
+    const client = await getPool().connect();
+    let createdId;
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock($1)", [591447517]);
+      const serialNo = await nextSerialNumberPostgres(client);
+      const data = cleanData({ ...(incomingData || {}), [serialField]: serialNo });
+      const summary = summarize(data);
+      const change = diffData(emptyData(), data);
+      const { rows } = await client.query(
+        `
+          INSERT INTO people (
+            full_name,
+            badge_no,
+            department,
+            phone_number,
+            data
+          )
+          VALUES ($1, $2, $3, $4, $5)
+          RETURNING id
+        `,
+        [
+          summary.fullName,
+          summary.badgeNo,
+          summary.department,
+          summary.phoneNumber,
+          data,
+        ]
+      );
+      createdId = rows[0].id;
+      await client.query(
+        `
+          INSERT INTO audit_logs (person_id, name, badge_no, changed_by, action, "change")
+          VALUES ($1, $2, $3, $4, 'create', $5)
+        `,
+        [createdId, summary.fullName, summary.badgeNo, changedBy, change]
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+    return getPerson(createdId);
+  }
+
+  const db = getSqlite();
+  let createdId;
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const serialNo = nextSerialNumberSqlite(db);
+    const data = cleanData({ ...(incomingData || {}), [serialField]: serialNo });
+    const summary = summarize(data);
+    const change = diffData(emptyData(), data);
+    const result = db
+      .prepare(`
+        INSERT INTO people (
+          full_name,
+          badge_no,
+          department,
+          phone_number,
+          data
+        ) VALUES (?, ?, ?, ?, ?)
+      `)
+      .run(
+        summary.fullName,
+        summary.badgeNo,
+        summary.department,
+        summary.phoneNumber,
+        JSON.stringify(data)
+      );
+    createdId = Number(result.lastInsertRowid);
+    db
+      .prepare(`
+        INSERT INTO audit_logs (person_id, name, badge_no, changed_by, action, "change")
+        VALUES (?, ?, ?, ?, 'create', ?)
+      `)
+      .run(createdId, summary.fullName, summary.badgeNo, changedBy, JSON.stringify(change));
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+
+  return getPerson(createdId);
+}
+
 export async function getPerson(id) {
   await initializeDatabase();
   const row = await getPersonRow(id);
@@ -1233,6 +1326,27 @@ function summarize(data) {
 
 function emptyData() {
   return Object.fromEntries(fields.map((field) => [field, ""]));
+}
+
+async function nextSerialNumberPostgres(client) {
+  const { rows } = await client.query(`
+    SELECT COALESCE(MAX((data->>'S No')::integer), 0) + 1 AS next_serial
+    FROM people
+    WHERE data->>'S No' ~ '^[0-9]+$'
+  `);
+  return String(rows[0]?.next_serial || 1);
+}
+
+function nextSerialNumberSqlite(db) {
+  const rows = db.prepare("SELECT data FROM people").all();
+  let maxSerial = 0;
+  for (const row of rows) {
+    const data = JSON.parse(row.data);
+    const serial = normalizeValue(data[serialField]);
+    if (!/^\d+$/.test(serial)) continue;
+    maxSerial = Math.max(maxSerial, Number(serial));
+  }
+  return String(maxSerial + 1);
 }
 
 function dataFromAuditSnapshot(change, fallbackData = {}) {
