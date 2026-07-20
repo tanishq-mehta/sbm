@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 const TOKEN_KEY = "sbm-user-manager-token";
-const USER_KEY = "sbm-user-manager-user";
+const LEGACY_USER_KEY = "sbm-user-manager-user";
 const dateFields = ["Birth Date", "Initiation Date"];
 const addressLimitFields = ["Address Line 1", "Address Line 2"];
 
@@ -72,11 +72,12 @@ const sections = [
 
 export default function App() {
   const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY) || "");
-  const [user, setUser] = useState(readStoredUser);
+  const [user, setUser] = useState(null);
   const [sessionLoading, setSessionLoading] = useState(Boolean(token));
   const [route, setRoute] = useState(readRoute);
 
   useEffect(() => {
+    localStorage.removeItem(LEGACY_USER_KEY);
     const onHashChange = () => setRoute(readRoute());
     window.addEventListener("hashchange", onHashChange);
     if (!window.location.hash) window.location.hash = "#/home";
@@ -97,11 +98,6 @@ export default function App() {
         if (cancelled) return;
         const nextUser = payload.user || null;
         setUser(nextUser);
-        if (nextUser) {
-          localStorage.setItem(USER_KEY, JSON.stringify(nextUser));
-        } else {
-          localStorage.removeItem(USER_KEY);
-        }
       })
       .catch(() => {
         if (!cancelled) handleLogout();
@@ -117,7 +113,7 @@ export default function App() {
 
   function handleLogin(nextToken, nextUser) {
     localStorage.setItem(TOKEN_KEY, nextToken);
-    if (nextUser) localStorage.setItem(USER_KEY, JSON.stringify(nextUser));
+    localStorage.removeItem(LEGACY_USER_KEY);
     setToken(nextToken);
     setUser(nextUser || null);
     window.location.hash = "#/home";
@@ -125,7 +121,7 @@ export default function App() {
 
   function handleLogout() {
     localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(USER_KEY);
+    localStorage.removeItem(LEGACY_USER_KEY);
     setToken("");
     setUser(null);
   }
@@ -998,15 +994,6 @@ async function apiFetch(path, { token, method = "GET", body } = {}) {
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.message || "Request failed.");
   return payload;
-}
-
-function readStoredUser() {
-  try {
-    return JSON.parse(localStorage.getItem(USER_KEY) || "null");
-  } catch {
-    localStorage.removeItem(USER_KEY);
-    return null;
-  }
 }
 
 function readRoute() {

@@ -326,7 +326,10 @@ function applyCors(res) {
 
 function sendJson(res, status, payload) {
   if (res.headersSent) return;
-  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
+  res.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store",
+  });
   res.end(JSON.stringify(payload));
 }
 
