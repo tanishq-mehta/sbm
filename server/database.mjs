@@ -344,39 +344,40 @@ export async function renumberSerialNumbers(options = {}) {
   await initializeDatabase({ seedIfEmpty: false });
   const batchSize = Math.max(1, Math.min(Number(options.batchSize) || 250, 1000));
   const changedBy = normalizeChangedBy(options.changedBy || "system-sno-renumbering");
-  const people = (await getAllPersonRows())
-    .map(rowToPerson)
-    .sort(comparePeopleForSerialNumber);
-  const updates = people
-    .map((person, index) => {
-      const newSerial = String(index + 1);
-      const oldSerial = normalizeValue(person.data?.[serialField]);
-      if (oldSerial === newSerial) return null;
-
+  const people = (await getAllPersonRows()).map(rowToPerson);
+  const assignments = buildSerialAssignments(people);
+  const updates = assignments
+    .filter((assignment) => assignment.oldSerial !== assignment.newSerial)
+    .map((assignment) => {
       const data = cleanData({
-        ...person.data,
-        [serialField]: newSerial,
+        ...assignment.person.data,
+        [serialField]: assignment.newSerial,
       });
       return {
-        person,
+        person: assignment.person,
         data,
         summary: summarize(data),
         change: {
           [serialField]: {
-            old: oldSerial,
-            new: newSerial,
+            old: assignment.oldSerial,
+            new: assignment.newSerial,
           },
         },
       };
-    })
-    .filter(Boolean);
+    });
 
   const result = {
     total: people.length,
     updated: updates.length,
     batchSize,
-    first: people[0] ? serialPreview(people[0], 1) : null,
-    last: people.length ? serialPreview(people[people.length - 1], people.length) : null,
+    groups: serialGroupSummary(assignments),
+    skipped: people
+      .filter((person) => !badgeSerialGroup(person.data?.[badgeField] || person.badgeNo))
+      .map((person) => serialPreview(person, person.data?.[serialField] || "")),
+    first: assignments[0] ? serialPreview(assignments[0].person, assignments[0].newSerial) : null,
+    last: assignments.length
+      ? serialPreview(assignments[assignments.length - 1].person, assignments[assignments.length - 1].newSerial)
+      : null,
   };
 
   if (options.dryRun || updates.length === 0) {
@@ -560,8 +561,9 @@ export async function createPerson(incomingData, options = {}) {
     try {
       await client.query("BEGIN");
       await client.query("SELECT pg_advisory_xact_lock($1)", [591447517]);
-      const serialNo = await nextSerialNumberPostgres(client);
-      const data = cleanData({ ...(incomingData || {}), [serialField]: serialNo });
+      const incoming = cleanData(incomingData || {});
+      const serialNo = await nextSerialNumberPostgres(client, incoming[badgeField]);
+      const data = cleanData({ ...incoming, [serialField]: serialNo });
       const summary = summarize(data);
       const change = diffData(emptyData(), data);
       const { rows } = await client.query(
@@ -606,8 +608,9 @@ export async function createPerson(incomingData, options = {}) {
   let createdId;
   db.exec("BEGIN IMMEDIATE");
   try {
-    const serialNo = nextSerialNumberSqlite(db);
-    const data = cleanData({ ...(incomingData || {}), [serialField]: serialNo });
+    const incoming = cleanData(incomingData || {});
+    const serialNo = nextSerialNumberSqlite(db, incoming[badgeField]);
+    const data = cleanData({ ...incoming, [serialField]: serialNo });
     const summary = summarize(data);
     const change = diffData(emptyData(), data);
     const result = db
@@ -1356,25 +1359,99 @@ function emptyData() {
   return Object.fromEntries(fields.map((field) => [field, ""]));
 }
 
-async function nextSerialNumberPostgres(client) {
-  const { rows } = await client.query(`
-    SELECT COALESCE(MAX((data->>'S No')::integer), 0) + 1 AS next_serial
-    FROM people
-    WHERE data->>'S No' ~ '^[0-9]+$'
-  `);
-  return String(rows[0]?.next_serial || 1);
+async function nextSerialNumberPostgres(client, badgeNo) {
+  const group = requireBadgeSerialGroup(badgeNo);
+  const badgePattern = `${group}%`;
+  const { rows } = await client.query(
+    `
+      SELECT
+        COUNT(*)::int AS total,
+        COALESCE(MAX(
+          CASE
+            WHEN $1 = 'PR' AND data->>$2 ~ '^[0-9]+$' THEN (data->>$2)::int
+            WHEN $1 = 'EC' AND data->>$2 ~* '^S[0-9]+$' THEN substring(data->>$2 from 2)::int
+            ELSE NULL
+          END
+        ), 0)::int AS max_serial
+      FROM people
+      WHERE upper(coalesce(data->>$3, badge_no, '')) LIKE $4
+    `,
+    [group, serialField, badgeField, badgePattern]
+  );
+  return serialForBadgeGroup(group, Math.max(rows[0]?.max_serial || 0, rows[0]?.total || 0) + 1);
 }
 
-function nextSerialNumberSqlite(db) {
+function nextSerialNumberSqlite(db, badgeNo) {
+  const group = requireBadgeSerialGroup(badgeNo);
   const rows = db.prepare("SELECT data FROM people").all();
   let maxSerial = 0;
+  let total = 0;
   for (const row of rows) {
     const data = JSON.parse(row.data);
-    const serial = normalizeValue(data[serialField]);
-    if (!/^\d+$/.test(serial)) continue;
-    maxSerial = Math.max(maxSerial, Number(serial));
+    if (badgeSerialGroup(data[badgeField]) !== group) continue;
+    total += 1;
+    const serialNumber = serialNumberForGroup(data[serialField], group);
+    if (serialNumber) maxSerial = Math.max(maxSerial, serialNumber);
   }
-  return String(maxSerial + 1);
+  return serialForBadgeGroup(group, Math.max(maxSerial, total) + 1);
+}
+
+function buildSerialAssignments(people) {
+  return ["PR", "EC"].flatMap((group) =>
+    people
+      .filter((person) => badgeSerialGroup(person.data?.[badgeField] || person.badgeNo) === group)
+      .sort(comparePeopleForSerialNumber)
+      .map((person, index) => ({
+        group,
+        person,
+        oldSerial: normalizeValue(person.data?.[serialField]),
+        newSerial: serialForBadgeGroup(group, index + 1),
+      }))
+  );
+}
+
+function serialGroupSummary(assignments) {
+  return ["PR", "EC"].reduce((summary, group) => {
+    const groupAssignments = assignments.filter((assignment) => assignment.group === group);
+    summary[group] = {
+      total: groupAssignments.length,
+      first: groupAssignments[0]
+        ? serialPreview(groupAssignments[0].person, groupAssignments[0].newSerial)
+        : null,
+      last: groupAssignments.length
+        ? serialPreview(groupAssignments[groupAssignments.length - 1].person, groupAssignments[groupAssignments.length - 1].newSerial)
+        : null,
+    };
+    return summary;
+  }, {});
+}
+
+function badgeSerialGroup(badgeNo) {
+  const badge = normalizeValue(badgeNo).toUpperCase();
+  if (badge.startsWith("PR")) return "PR";
+  if (badge.startsWith("EC")) return "EC";
+  return "";
+}
+
+function requireBadgeSerialGroup(badgeNo) {
+  const group = badgeSerialGroup(badgeNo);
+  if (!group) {
+    throw statusError(400, "Badge no. must start with PR or EC before S No can be assigned.");
+  }
+  return group;
+}
+
+function serialForBadgeGroup(group, index) {
+  return group === "EC" ? `S${index}` : String(index);
+}
+
+function serialNumberForGroup(serialNo, group) {
+  const serial = normalizeValue(serialNo);
+  if (group === "PR") {
+    return /^\d+$/.test(serial) ? Number(serial) : 0;
+  }
+  const match = serial.match(/^S(\d+)$/i);
+  return match ? Number(match[1]) : 0;
 }
 
 function dataFromAuditSnapshot(change, fallbackData = {}) {

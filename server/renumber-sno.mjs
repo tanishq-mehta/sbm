@@ -10,9 +10,17 @@ await closeDatabase();
 const action = dryRun ? "Would normalize" : "Normalized";
 console.log(`${action} ${result.updated} S No record${result.updated === 1 ? "" : "s"}.`);
 console.log(`Active records: ${result.total}. Batch size: ${result.batchSize}.`);
-if (result.first) {
-  console.log(`First: ${result.first.serial} ${result.first.badgeNo} ${result.first.name}`.trim());
+for (const group of ["PR", "EC"]) {
+  const summary = result.groups?.[group];
+  if (!summary) continue;
+  console.log(`${group} records: ${summary.total}.`);
+  if (summary.first) {
+    console.log(`  First: ${summary.first.serial} ${summary.first.badgeNo} ${summary.first.name}`.trim());
+  }
+  if (summary.last) {
+    console.log(`  Last: ${summary.last.serial} ${summary.last.badgeNo} ${summary.last.name}`.trim());
+  }
 }
-if (result.last) {
-  console.log(`Last: ${result.last.serial} ${result.last.badgeNo} ${result.last.name}`.trim());
+if (result.skipped?.length) {
+  console.log(`Skipped ${result.skipped.length} records without PR/EC badge prefixes.`);
 }

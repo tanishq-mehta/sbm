@@ -13,6 +13,7 @@ import {
   listAllAuditLogs,
   listAllPeople,
   listPeople,
+  renumberSerialNumbers,
   restorePersonFromAudit,
   searchableFields,
   updatePerson,
@@ -173,6 +174,16 @@ export async function handleApiRequest(req, res) {
       return;
     }
 
+    if (url.pathname === "/api/admin/renumber-sno" && req.method === "POST") {
+      const body = await readJson(req);
+      sendJson(res, 200, await renumberSerialNumbers({
+        batchSize: body.batchSize,
+        dryRun: Boolean(body.dryRun),
+        changedBy: authenticatedUser.username,
+      }));
+      return;
+    }
+
     if (url.pathname === "/api/audits" && req.method === "GET") {
       const limit = url.searchParams.get("limit") || "500";
       sendJson(res, 200, {
@@ -312,6 +323,7 @@ function requireAdmin(res, user, message) {
 function isAdminOnlyMutation(url, method) {
   return (
     (url.pathname === "/api/people" && method === "POST") ||
+    (url.pathname === "/api/admin/renumber-sno" && method === "POST") ||
     (method === "DELETE" && /^\/api\/people\/\d+$/.test(url.pathname)) ||
     (method === "POST" && /^\/api\/audits\/\d+\/restore$/.test(url.pathname))
   );
@@ -320,6 +332,9 @@ function isAdminOnlyMutation(url, method) {
 function adminOnlyMessage(url, method) {
   if (url.pathname === "/api/people" && method === "POST") {
     return "Only admin users can create users.";
+  }
+  if (url.pathname === "/api/admin/renumber-sno" && method === "POST") {
+    return "Only admin users can renumber S No values.";
   }
   if (method === "DELETE" && /^\/api\/people\/\d+$/.test(url.pathname)) {
     return "Only admin users can delete users.";
