@@ -270,6 +270,19 @@ textarea[readonly] {
   gap: 10px;
 }
 
+.role-pill {
+  min-height: 30px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid #cdd9d4;
+  border-radius: 999px;
+  background: #e8f5ef;
+  color: #1c604d;
+  padding: 0 10px;
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
 .page-actions {
   justify-content: flex-end;
   flex-wrap: wrap;

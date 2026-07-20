@@ -90,6 +90,17 @@ export async function handleApiRequest(req, res) {
       return;
     }
 
+    if (url.pathname === "/api/session" && req.method === "GET") {
+      sendJson(res, 200, { user: authenticatedUser });
+      return;
+    }
+
+    if (isAdminOnlyMutation(url, req.method)) {
+      if (!requireAdmin(res, authenticatedUser, adminOnlyMessage(url, req.method))) {
+        return;
+      }
+    }
+
     await ensureDatabaseInitialized();
 
     if (url.pathname === "/api/fields" && req.method === "GET") {
@@ -281,6 +292,30 @@ function getAuthenticatedUser(req) {
   const authorization = req.headers.authorization || "";
   const [type, token] = authorization.split(" ");
   return type === "Bearer" ? verifySessionToken(token) : null;
+}
+
+function requireAdmin(res, user, message) {
+  if (user?.isAdmin) return true;
+  sendJson(res, 403, { message });
+  return false;
+}
+
+function isAdminOnlyMutation(url, method) {
+  return (
+    (url.pathname === "/api/people" && method === "POST") ||
+    (method === "DELETE" && /^\/api\/people\/\d+$/.test(url.pathname)) ||
+    (method === "POST" && /^\/api\/audits\/\d+\/restore$/.test(url.pathname))
+  );
+}
+
+function adminOnlyMessage(url, method) {
+  if (url.pathname === "/api/people" && method === "POST") {
+    return "Only admin users can create users.";
+  }
+  if (method === "DELETE" && /^\/api\/people\/\d+$/.test(url.pathname)) {
+    return "Only admin users can delete users.";
+  }
+  return "Only admin users can restore deleted users.";
 }
 
 function applyCors(res) {

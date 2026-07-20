@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 const TOKEN_KEY = "sbm-user-manager-token";
+const USER_KEY = "sbm-user-manager-user";
 const dateFields = ["Birth Date", "Initiation Date"];
 const addressLimitFields = ["Address Line 1", "Address Line 2"];
 
@@ -71,6 +72,8 @@ const sections = [
 
 export default function App() {
   const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY) || "");
+  const [user, setUser] = useState(readStoredUser);
+  const [sessionLoading, setSessionLoading] = useState(Boolean(token));
   const [route, setRoute] = useState(readRoute);
 
   useEffect(() => {
@@ -80,33 +83,79 @@ export default function App() {
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
 
-  function handleLogin(nextToken) {
+  useEffect(() => {
+    let cancelled = false;
+    if (!token) {
+      setUser(null);
+      setSessionLoading(false);
+      return undefined;
+    }
+
+    setSessionLoading(true);
+    apiFetch("/api/session", { token })
+      .then((payload) => {
+        if (cancelled) return;
+        const nextUser = payload.user || null;
+        setUser(nextUser);
+        if (nextUser) {
+          localStorage.setItem(USER_KEY, JSON.stringify(nextUser));
+        } else {
+          localStorage.removeItem(USER_KEY);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) handleLogout();
+      })
+      .finally(() => {
+        if (!cancelled) setSessionLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
+  function handleLogin(nextToken, nextUser) {
     localStorage.setItem(TOKEN_KEY, nextToken);
+    if (nextUser) localStorage.setItem(USER_KEY, JSON.stringify(nextUser));
     setToken(nextToken);
+    setUser(nextUser || null);
     window.location.hash = "#/home";
   }
 
   function handleLogout() {
     localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(USER_KEY);
     setToken("");
+    setUser(null);
   }
 
   if (!token) {
     return <LoginPage onLogin={handleLogin} />;
   }
 
+  if (sessionLoading) {
+    return <SessionLoadingPage />;
+  }
+
+  const canManageUsers = Boolean(user?.isAdmin);
+
   return (
-    <Shell onLogout={handleLogout}>
+    <Shell onLogout={handleLogout} user={user}>
       {route.name === "audit" ? (
-        <AuditPage token={token} />
+        <AuditPage token={token} canManageUsers={canManageUsers} />
       ) : route.name === "summary" ? (
         <SummaryPage token={token} />
       ) : route.name === "new-person" ? (
-        <PersonPage token={token} isNew />
+        canManageUsers ? (
+          <PersonPage token={token} isNew canManageUsers />
+        ) : (
+          <ForbiddenPage />
+        )
       ) : route.name === "person" ? (
-        <PersonPage id={route.id} token={token} />
+        <PersonPage id={route.id} token={token} canManageUsers={canManageUsers} />
       ) : (
-        <HomePage token={token} />
+        <HomePage token={token} canManageUsers={canManageUsers} />
       )}
     </Shell>
   );
@@ -130,7 +179,7 @@ function LoginPage({ onLogin }) {
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.message || "Login failed.");
-      onLogin(payload.token);
+      onLogin(payload.token, payload.user);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -178,7 +227,26 @@ function LoginPage({ onLogin }) {
   );
 }
 
-function Shell({ children, onLogout }) {
+function SessionLoadingPage() {
+  return (
+    <main className="page">
+      <p className="empty-state">Loading session...</p>
+    </main>
+  );
+}
+
+function ForbiddenPage() {
+  return (
+    <main className="page">
+      <button className="secondary-button" onClick={() => (window.location.hash = "#/home")}>
+        Back to search
+      </button>
+      <p className="form-error wide">Only admin users can perform this action.</p>
+    </main>
+  );
+}
+
+function Shell({ children, onLogout, user }) {
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -187,6 +255,7 @@ function Shell({ children, onLogout }) {
           <span>User Manager</span>
         </button>
         <div className="topbar-actions">
+          {user?.isAdmin ? <span className="role-pill">Admin</span> : null}
           <button className="secondary-button compact" onClick={() => (window.location.hash = "#/summary")}>
             Summary
           </button>
@@ -203,7 +272,7 @@ function Shell({ children, onLogout }) {
   );
 }
 
-function HomePage({ token }) {
+function HomePage({ token, canManageUsers }) {
   const [fields, setFields] = useState([]);
   const [searchableFields, setSearchableFields] = useState(["All fields"]);
   const [query, setQuery] = useState("");
@@ -276,9 +345,11 @@ function HomePage({ token }) {
           <h1>Find and update user data</h1>
         </div>
         <div className="page-actions">
-          <button className="primary-button" onClick={() => (window.location.hash = "#/people/new")}>
-            Create new user
-          </button>
+          {canManageUsers ? (
+            <button className="primary-button" onClick={() => (window.location.hash = "#/people/new")}>
+              Create new user
+            </button>
+          ) : null}
           <button className="secondary-button" onClick={() => (window.location.hash = "#/summary")}>
             Summary
           </button>
@@ -368,7 +439,7 @@ function HomePage({ token }) {
   );
 }
 
-function AuditPage({ token }) {
+function AuditPage({ token, canManageUsers }) {
   const [audits, setAudits] = useState([]);
   const [loading, setLoading] = useState(true);
   const [downloading, setDownloading] = useState(false);
@@ -492,7 +563,7 @@ function AuditPage({ token }) {
                   </p>
                 </div>
                 <div className="audit-entry-tools">
-                  {entry.restorable ? (
+                  {entry.restorable && canManageUsers ? (
                     <button
                       type="button"
                       className="secondary-button compact"
@@ -656,7 +727,7 @@ function SummaryPage({ token }) {
   );
 }
 
-function PersonPage({ id, token, isNew = false }) {
+function PersonPage({ id, token, isNew = false, canManageUsers = false }) {
   const [person, setPerson] = useState(null);
   const [fields, setFields] = useState([]);
   const [dropdownOptions, setDropdownOptions] = useState({});
@@ -795,7 +866,7 @@ function PersonPage({ id, token, isNew = false }) {
             </p>
           )}
         </div>
-        {!isNew ? (
+        {!isNew && canManageUsers ? (
           <button
             type="button"
             className="danger-button record-delete-button"
@@ -927,6 +998,15 @@ async function apiFetch(path, { token, method = "GET", body } = {}) {
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.message || "Request failed.");
   return payload;
+}
+
+function readStoredUser() {
+  try {
+    return JSON.parse(localStorage.getItem(USER_KEY) || "null");
+  } catch {
+    localStorage.removeItem(USER_KEY);
+    return null;
+  }
 }
 
 function readRoute() {

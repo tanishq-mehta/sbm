@@ -9,6 +9,8 @@ const sessionMaxAgeSeconds = Number(process.env.AUTH_SESSION_SECONDS || 60 * 60 
 
 let cachedUsersRaw;
 let cachedUsers;
+let cachedAdminUsersRaw;
+let cachedAdminUsernames;
 
 export class AuthConfigurationError extends Error {
   constructor(message) {
@@ -26,7 +28,7 @@ export function authenticateUser(username, password) {
   );
   if (!user || !verifyPassword(password, user.passwordHash)) return null;
 
-  return { username: user.username };
+  return publicUser(user.username);
 }
 
 export function createSessionToken(username) {
@@ -55,7 +57,7 @@ export function verifySessionToken(token) {
     const user = getConfiguredUsers().find(
       (entry) => entry.username.toLowerCase() === String(parsed.sub).toLowerCase()
     );
-    return user ? { username: user.username } : null;
+    return user ? publicUser(user.username) : null;
   } catch {
     return null;
   }
@@ -133,6 +135,47 @@ function normalizeUser(entry) {
   const passwordHash = String(entry?.passwordHash || "").trim();
   if (!username || !passwordHash) return null;
   return { username, passwordHash };
+}
+
+function publicUser(username) {
+  return {
+    username,
+    isAdmin: isAdminUsername(username),
+  };
+}
+
+function isAdminUsername(username) {
+  return getAdminUsernames().has(String(username || "").trim().toLowerCase());
+}
+
+function getAdminUsernames() {
+  const raw = process.env.AUTH_ADMIN_USERS || process.env.AUTH_ADMIN_USERS_JSON || "";
+  if (raw === cachedAdminUsersRaw && cachedAdminUsernames) return cachedAdminUsernames;
+
+  cachedAdminUsersRaw = raw;
+  cachedAdminUsernames = new Set(parseUsernameList(raw));
+  return cachedAdminUsernames;
+}
+
+function parseUsernameList(raw) {
+  const trimmed = String(raw || "").trim();
+  if (!trimmed) return [];
+
+  if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
+    const parsed = JSON.parse(trimmed);
+    const usernames = Array.isArray(parsed)
+      ? parsed
+      : Object.keys(parsed).filter((username) => parsed[username]);
+    return normalizeUsernameList(usernames);
+  }
+
+  return normalizeUsernameList(trimmed.split(","));
+}
+
+function normalizeUsernameList(values) {
+  return values
+    .map((value) => String(value || "").trim().toLowerCase())
+    .filter(Boolean);
 }
 
 function sign(payload) {
