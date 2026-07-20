@@ -6,6 +6,7 @@ import {
   dropdownOptions,
   fields,
   getPerson,
+  getLocationOptions,
   getVerificationSummary,
   initializeDatabase,
   listAuditLogs,
@@ -105,6 +106,14 @@ export async function handleApiRequest(req, res) {
 
     if (url.pathname === "/api/fields" && req.method === "GET") {
       sendJson(res, 200, { fields, searchableFields, dropdownOptions });
+      return;
+    }
+
+    if (url.pathname === "/api/location-options" && req.method === "GET") {
+      sendJson(res, 200, getLocationOptions({
+        state: url.searchParams.get("state") || "",
+        district: url.searchParams.get("district") || "",
+      }));
       return;
     }
 

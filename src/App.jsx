@@ -727,6 +727,7 @@ function PersonPage({ id, token, isNew = false, canManageUsers = false }) {
   const [person, setPerson] = useState(null);
   const [fields, setFields] = useState([]);
   const [dropdownOptions, setDropdownOptions] = useState({});
+  const [locationOptions, setLocationOptions] = useState({ states: [], districts: [], cities: [] });
   const [formData, setFormData] = useState({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -767,6 +768,25 @@ function PersonPage({ id, token, isNew = false, canManageUsers = false }) {
       cancelled = true;
     };
   }, [id, isNew, token]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const params = new URLSearchParams();
+    if (formData.State) params.set("state", formData.State);
+    if (formData.District) params.set("district", formData.District);
+
+    apiFetch(`/api/location-options?${params.toString()}`, { token })
+      .then((payload) => {
+        if (!cancelled) setLocationOptions(payload);
+      })
+      .catch(() => {
+        if (!cancelled) setLocationOptions({ states: [], districts: [], cities: [] });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [formData.State, formData.District, token]);
 
   const groupedSections = useMemo(() => buildSections(fields), [fields]);
 
@@ -884,7 +904,7 @@ function PersonPage({ id, token, isNew = false, canManageUsers = false }) {
                   key={field}
                   field={field}
                   value={formData[field] || ""}
-                  options={dropdownOptions[field] || []}
+                  options={fieldOptions(field, dropdownOptions, locationOptions)}
                   readOnly={field === "S No"}
                   placeholder={field === "S No" ? "Assigned automatically" : ""}
                   onChange={(value) => updateField(field, value)}
@@ -1023,6 +1043,13 @@ function blankFormData(fields) {
   const data = Object.fromEntries(fields.map((field) => [field, ""]));
   if (fields.includes("Verification Status")) data["Verification Status"] = "None";
   return data;
+}
+
+function fieldOptions(field, dropdownOptions, locationOptions) {
+  if (field === "State") return locationOptions.states || [];
+  if (field === "District") return locationOptions.districts || [];
+  if (field === "City") return locationOptions.cities || [];
+  return dropdownOptions[field] || [];
 }
 
 function inputType(field) {

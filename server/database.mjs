@@ -15,12 +15,16 @@ const dbPath = process.env.DB_PATH || path.join(dataDir, "users.sqlite");
 const fieldsPath = path.join(dataDir, "fields.json");
 const seedPath = path.join(dataDir, "people-seed.json");
 const dropdownOptionsPath = path.join(dataDir, "dropdown-options.json");
+const locationOptionsPath = path.join(dataDir, "location-options.json");
 
 export const fields = JSON.parse(fs.readFileSync(fieldsPath, "utf8"));
 export const searchableFields = ["All fields", ...fields];
 export const dropdownOptions = fs.existsSync(dropdownOptionsPath)
   ? JSON.parse(fs.readFileSync(dropdownOptionsPath, "utf8"))
   : {};
+export const locationOptions = fs.existsSync(locationOptionsPath)
+  ? JSON.parse(fs.readFileSync(locationOptionsPath, "utf8"))
+  : { states: [], districtsByState: {}, citiesByStateDistrict: {} };
 export const databaseProvider = process.env.DATABASE_URL ? "postgres" : "sqlite";
 const emailField = "Email Id";
 const serialField = "S No";
@@ -464,6 +468,30 @@ export async function listPeople({ query = "", field = "All fields", limit = 200
 export async function listAllPeople() {
   await initializeDatabase();
   return (await getAllPersonRows()).map(rowToPerson);
+}
+
+export function getLocationOptions({ state = "", district = "" } = {}) {
+  const states = locationOptions.states || [];
+  const selectedState = findOption(state, states);
+  const districts = selectedState
+    ? locationOptions.districtsByState?.[selectedState] || []
+    : allLocationDistricts();
+  const selectedDistrict = findOption(district, districts);
+
+  let cities = [];
+  if (selectedState && selectedDistrict) {
+    cities = locationOptions.citiesByStateDistrict?.[selectedState]?.[selectedDistrict] || [];
+  } else if (selectedDistrict) {
+    cities = allLocationCitiesForDistrict(selectedDistrict);
+  }
+
+  return {
+    states,
+    districts,
+    cities,
+    selectedState,
+    selectedDistrict,
+  };
 }
 
 export async function getVerificationSummary({ department = "" } = {}) {
@@ -1567,6 +1595,29 @@ function getDepartmentOptions(people) {
       total,
     }))
     .sort((a, b) => a.label.localeCompare(b.label));
+}
+
+function allLocationDistricts() {
+  return uniqueSorted(Object.values(locationOptions.districtsByState || {}).flat());
+}
+
+function allLocationCitiesForDistrict(district) {
+  const cities = [];
+  for (const districts of Object.values(locationOptions.citiesByStateDistrict || {})) {
+    cities.push(...(districts?.[district] || []));
+  }
+  return uniqueSorted(cities);
+}
+
+function findOption(value, options = []) {
+  const normalized = normalizeSearch(value);
+  if (!normalized) return "";
+  return options.find((option) => normalizeSearch(option) === normalized) || "";
+}
+
+function uniqueSorted(values) {
+  return [...new Set(values.filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b, "en", { numeric: true, sensitivity: "base" }));
 }
 
 function countStatuses(people) {
