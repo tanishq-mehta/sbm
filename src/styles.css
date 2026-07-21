@@ -552,116 +552,10 @@ tbody tr:focus {
   border-radius: inherit;
 }
 
-.bar-fill.mismatch {
-  background: #d95344;
-}
-
-.bar-fill.blank {
-  background: #9aa8a4;
-}
-
-.quality-overview {
-  display: grid;
-  grid-template-columns: minmax(180px, 1fr) repeat(2, minmax(180px, 1fr));
-  gap: 14px;
-  margin-bottom: 20px;
-}
-
-.quality-overview > div {
-  border: 1px solid #dce4df;
-  border-radius: 8px;
-  background: #ffffff;
-  padding: 16px;
-}
-
-.quality-group-key {
-  display: grid;
-  gap: 3px;
-  color: #637370;
-  font-weight: 800;
-}
-
-.quality-group-key strong {
-  color: #173f3b;
-  font-size: 1.65rem;
-  line-height: 1;
-}
-
-.quality-chart {
-  display: grid;
-  gap: 14px;
-  padding: 18px 16px 10px;
-}
-
-.quality-bar-row {
-  display: grid;
-  grid-template-columns: 140px minmax(120px, 1fr) 70px;
-  gap: 12px;
-  align-items: center;
-}
-
-.quality-bar-row span {
-  color: #3c4d4b;
-  font-weight: 800;
-}
-
-.quality-bar-row strong {
-  text-align: right;
-}
-
-.quality-track {
-  display: flex;
-  gap: 2px;
-}
-
-.quality-track .bar-fill {
-  border-radius: 0;
-}
-
-.quality-track .bar-fill:first-child {
-  border-radius: 99px 0 0 99px;
-}
-
-.quality-track .bar-fill:last-child {
-  border-radius: 0 99px 99px 0;
-}
-
-.quality-legend {
-  display: flex;
-  gap: 14px;
-  flex-wrap: wrap;
-  padding: 0 16px 16px;
-  color: #526360;
-  font-size: 0.88rem;
-  font-weight: 800;
-}
-
-.quality-legend span {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.legend-swatch {
-  display: inline-block;
-  width: 12px;
-  height: 12px;
-  border-radius: 3px;
-}
-
-.legend-swatch.mismatch {
-  background: #d95344;
-}
-
-.legend-swatch.blank {
-  background: #9aa8a4;
-}
-
 .quality-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
-  margin-top: 20px;
 }
 
 .quality-card {
@@ -944,7 +838,6 @@ tbody tr:focus {
   .field-grid,
   .summary-toolbar,
   .summary-grid,
-  .quality-overview,
   .quality-grid,
   .date-field,
   .combo-field {
@@ -965,15 +858,6 @@ tbody tr:focus {
   .bar-row {
     grid-template-columns: 1fr;
     gap: 6px;
-  }
-
-  .quality-bar-row {
-    grid-template-columns: 1fr;
-    gap: 6px;
-  }
-
-  .quality-bar-row strong {
-    text-align: left;
   }
 
   .audit-entry-header,

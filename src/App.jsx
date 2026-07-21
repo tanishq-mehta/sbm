@@ -786,10 +786,6 @@ function DataQualitySummaryTab({ token }) {
   }, [token]);
 
   const fields = summary?.fields || [];
-  const maxTotal = Math.max(
-    1,
-    ...fields.map((field) => dataQualityFieldTotal(field))
-  );
 
   return (
     <>
@@ -797,78 +793,34 @@ function DataQualitySummaryTab({ token }) {
       {loading ? <p className="empty-state">Loading dropdown quality...</p> : null}
 
       {summary && !loading ? (
-        <>
-          <section className="quality-overview">
-            <div className="summary-total">
-              <span>Total people</span>
-              <strong>{summary.totalPeople}</strong>
-            </div>
-            {(summary.groups || []).map((group) => (
-              <div className="quality-group-key" key={group.key}>
-                <span>{group.label}</span>
-                <strong>{dataQualityGroupTotal(fields, group.key)}</strong>
-              </div>
-            ))}
-          </section>
-
-          <section className="chart-panel">
-            <div className="results-header">
-              <h2>Issue volume by field</h2>
-              <span>Blank and mismatching dropdown values</span>
-            </div>
-            <div className="quality-chart">
-              {fields.map((field) => (
-                <div className="quality-bar-row" key={field.key}>
-                  <span>{field.label}</span>
-                  <div className="bar-track quality-track" aria-label={`${field.label} issue count`}>
-                    <div
-                      className="bar-fill mismatch"
-                      style={{ width: `${qualityPercent(field.totals?.mismatch || 0, maxTotal)}%` }}
-                    />
-                    <div
-                      className="bar-fill blank"
-                      style={{ width: `${qualityPercent(field.totals?.blank || 0, maxTotal)}%` }}
-                    />
+        <section className="quality-grid">
+          {fields.map((field) => (
+            <article className="quality-card" key={field.key}>
+              <header>
+                <h2>{field.label}</h2>
+                <span>{dataQualityFieldTotal(field)} issues</span>
+              </header>
+              {(summary.groups || []).map((group) => (
+                <div className="quality-card-group" key={group.key}>
+                  <p>{group.label}</p>
+                  <div className="quality-metrics">
+                    {["mismatch", "blank"].map((issue) => (
+                      <button
+                        type="button"
+                        key={issue}
+                        onClick={() => openDataQualityList(field.key, issue, group.key)}
+                        disabled={!field.groups?.[group.key]?.[issue]}
+                      >
+                        <span>{issue === "mismatch" ? "Mismatching" : "Blank"}</span>
+                        <strong>{field.groups?.[group.key]?.[issue] || 0}</strong>
+                      </button>
+                    ))}
                   </div>
-                  <strong>{dataQualityFieldTotal(field)}</strong>
                 </div>
               ))}
-            </div>
-            <div className="quality-legend">
-              <span><i className="legend-swatch mismatch" /> Mismatching</span>
-              <span><i className="legend-swatch blank" /> Blank</span>
-            </div>
-          </section>
-
-          <section className="quality-grid">
-            {fields.map((field) => (
-              <article className="quality-card" key={field.key}>
-                <header>
-                  <h2>{field.label}</h2>
-                  <span>{dataQualityFieldTotal(field)} issues</span>
-                </header>
-                {(summary.groups || []).map((group) => (
-                  <div className="quality-card-group" key={group.key}>
-                    <p>{group.label}</p>
-                    <div className="quality-metrics">
-                      {["mismatch", "blank"].map((issue) => (
-                        <button
-                          type="button"
-                          key={issue}
-                          onClick={() => openDataQualityList(field.key, issue, group.key)}
-                          disabled={!field.groups?.[group.key]?.[issue]}
-                        >
-                          <span>{issue === "mismatch" ? "Mismatching" : "Blank"}</span>
-                          <strong>{field.groups?.[group.key]?.[issue] || 0}</strong>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </article>
-            ))}
-          </section>
-        </>
+            </article>
+          ))}
+        </section>
       ) : null}
     </>
   );
@@ -1442,21 +1394,6 @@ function barPercent(value, rows) {
 
 function dataQualityFieldTotal(field) {
   return (field.totals?.mismatch || 0) + (field.totals?.blank || 0);
-}
-
-function dataQualityGroupTotal(fields, groupKey) {
-  return fields.reduce(
-    (total, field) =>
-      total +
-      (field.groups?.[groupKey]?.mismatch || 0) +
-      (field.groups?.[groupKey]?.blank || 0),
-    0
-  );
-}
-
-function qualityPercent(value, maxTotal) {
-  if (!value) return 0;
-  return Math.max(2, (value / Math.max(1, maxTotal)) * 100);
 }
 
 function formatIssueDetails(details = []) {
