@@ -87,6 +87,13 @@ const dataQualityFields = [
     fields: ["District"],
   },
 ];
+const dataQualityGroupByStatus = new Map(
+  dataQualityGroups.flatMap((group) =>
+    [...group.statuses].map((status) => [status, group])
+  )
+);
+
+let dataQualityOptionSetsCache;
 
 let sqliteDb;
 let pgPool;
@@ -577,35 +584,29 @@ export async function getVerificationSummary({ department = "" } = {}) {
 export async function getDataQualitySummary() {
   await initializeDatabase();
   const people = (await getAllPersonRows()).map(rowToPerson);
-  const issues = buildDataQualityIssues(people);
+  const fieldsSummary = dataQualityFields.map(emptyDataQualityFieldSummary);
+  const fieldsByKey = new Map(fieldsSummary.map((field) => [field.key, field]));
+  const optionSets = dataQualityOptionSets();
+
+  for (const person of people) {
+    const group = dataQualityGroupForPerson(person);
+    if (!group) continue;
+
+    for (const definition of dataQualityFields) {
+      const details = dataQualityDetailsForField(person, definition, optionSets.get(definition.key) || new Set());
+      if (!details.issueType) continue;
+
+      const fieldSummary = fieldsByKey.get(definition.key);
+      fieldSummary.groups[group.key][details.issueType] += 1;
+      fieldSummary.totals[details.issueType] += 1;
+    }
+  }
 
   return {
     totalPeople: people.length,
     groups: dataQualityGroups.map(({ key, label }) => ({ key, label })),
     issueTypes: dataQualityIssueTypes,
-    fields: dataQualityFields.map((definition) => {
-      const entries = issues.filter((issue) => issue.fieldKey === definition.key);
-      const groupCounts = Object.fromEntries(
-        dataQualityGroups.map((group) => [
-          group.key,
-          dataQualityIssueTypes.reduce((counts, issueType) => {
-            counts[issueType.key] = entries.filter(
-              (entry) => entry.groupKey === group.key && entry.issueType === issueType.key
-            ).length;
-            return counts;
-          }, {})
-        ])
-      );
-      return {
-        key: definition.key,
-        label: definition.label,
-        groups: groupCounts,
-        totals: dataQualityIssueTypes.reduce((counts, issueType) => {
-          counts[issueType.key] = entries.filter((entry) => entry.issueType === issueType.key).length;
-          return counts;
-        }, {}),
-      };
-    }),
+    fields: fieldsSummary,
   };
 }
 
@@ -620,19 +621,24 @@ export async function listDataQualityPeople({ field, issue, group } = {}) {
   if (!groupDefinition) throw statusError(400, "Unknown verification group.");
 
   const people = (await getAllPersonRows()).map(rowToPerson);
-  const results = buildDataQualityIssues(people)
-    .filter(
-      (entry) =>
-        entry.fieldKey === fieldDefinition.key &&
-        entry.issueType === issueType.key &&
-        entry.groupKey === groupDefinition.key
-    )
-    .map((entry) => ({
-      ...toSummary(entry.person),
-      verificationStatus: entry.verificationStatus,
-      issueDetails: entry.details,
-    }))
-    .sort(compareDataQualityPeople);
+  const validOptions = dataQualityOptionSets().get(fieldDefinition.key) || new Set();
+  const results = [];
+
+  for (const person of people) {
+    const personGroup = dataQualityGroupForPerson(person);
+    if (personGroup?.key !== groupDefinition.key) continue;
+
+    const details = dataQualityDetailsForField(person, fieldDefinition, validOptions);
+    if (details.issueType !== issueType.key) continue;
+
+    results.push({
+      ...toSummary(person),
+      verificationStatus: normalizeVerificationValue(person.data?.[verificationField]),
+      issueDetails: details.rows,
+    });
+  }
+
+  results.sort(compareDataQualityPeople);
 
   return {
     field: { key: fieldDefinition.key, label: fieldDefinition.label },
@@ -1746,32 +1752,26 @@ function toSummary(person) {
   };
 }
 
-function buildDataQualityIssues(people) {
-  const optionSets = dataQualityOptionSets();
-  const issues = [];
+function emptyDataQualityFieldSummary(definition) {
+  return {
+    key: definition.key,
+    label: definition.label,
+    groups: Object.fromEntries(
+      dataQualityGroups.map((group) => [
+        group.key,
+        Object.fromEntries(dataQualityIssueTypes.map((issueType) => [issueType.key, 0])),
+      ])
+    ),
+    totals: Object.fromEntries(dataQualityIssueTypes.map((issueType) => [issueType.key, 0])),
+  };
+}
 
-  for (const person of people) {
-    const verificationStatus = normalizeVerificationValue(person.data?.[verificationField]);
-    const group = dataQualityGroups.find((entry) => entry.statuses.has(verificationStatus));
-    if (!group) continue;
+function dataQualityGroupForPerson(person) {
+  return dataQualityGroupForStatus(normalizeVerificationValue(person.data?.[verificationField]));
+}
 
-    for (const definition of dataQualityFields) {
-      const details = dataQualityDetailsForField(person, definition, optionSets.get(definition.key) || new Set());
-      if (!details.issueType) continue;
-
-      issues.push({
-        person,
-        fieldKey: definition.key,
-        fieldLabel: definition.label,
-        issueType: details.issueType,
-        groupKey: group.key,
-        verificationStatus,
-        details: details.rows,
-      });
-    }
-  }
-
-  return issues;
+function dataQualityGroupForStatus(status) {
+  return dataQualityGroupByStatus.get(status) || null;
 }
 
 function dataQualityDetailsForField(person, definition, validOptions) {
@@ -1810,32 +1810,34 @@ function dataQualityDetailsForField(person, definition, validOptions) {
 }
 
 function dataQualityOptionSets() {
-  return new Map(
-    dataQualityFields.map((definition) => [
-      definition.key,
-      new Set(dataQualityOptionsForField(definition).map((value) => normalizeValue(value)).filter(Boolean)),
-    ])
-  );
+  if (dataQualityOptionSetsCache) return dataQualityOptionSetsCache;
+
+  dataQualityOptionSetsCache = new Map();
+  for (const definition of dataQualityFields) {
+    const options = new Set();
+    for (const value of dataQualityOptionsForField(definition)) {
+      const normalized = normalizeValue(value);
+      if (normalized) options.add(normalized);
+    }
+    dataQualityOptionSetsCache.set(definition.key, options);
+  }
+  return dataQualityOptionSetsCache;
 }
 
 function dataQualityOptionsForField(definition) {
   if (definition.key === "skills") {
-    return uniqueSorted([
+    return [
       ...(dropdownOptions["Skills - 1"] || []),
       ...(dropdownOptions["Skills - 2"] || []),
-    ]);
+    ];
   }
   if (definition.key === "state") return locationOptions.states || [];
-  if (definition.key === "district") return allLocationDistricts();
-  if (definition.key === "city") return allLocationCities();
+  if (definition.key === "district") return Object.values(locationOptions.districtsByState || {}).flat();
+  if (definition.key === "city") {
+    return Object.values(locationOptions.citiesByStateDistrict || {})
+      .flatMap((districts) => Object.values(districts || {}).flat());
+  }
   return dropdownOptions[definition.fields[0]] || [];
-}
-
-function allLocationCities() {
-  return uniqueSorted(
-    Object.values(locationOptions.citiesByStateDistrict || {})
-      .flatMap((districts) => Object.values(districts || {}).flat())
-  );
 }
 
 function compareDataQualityPeople(a, b) {
