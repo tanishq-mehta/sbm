@@ -405,6 +405,37 @@ tbody tr:focus {
   max-width: 1040px;
 }
 
+.page-subtitle {
+  margin: 7px 0 0;
+  color: #637370;
+  font-weight: 700;
+}
+
+.summary-tabs {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(130px, 1fr));
+  gap: 4px;
+  margin-bottom: 16px;
+  border: 1px solid #cdd9d4;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 4px;
+}
+
+.summary-tabs button {
+  min-height: 36px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #526360;
+  font-weight: 900;
+}
+
+.summary-tabs button.active {
+  background: #173f3b;
+  color: #ffffff;
+}
+
 .summary-toolbar {
   display: grid;
   grid-template-columns: minmax(220px, 340px) auto;
@@ -519,6 +550,199 @@ tbody tr:focus {
 .bar-fill {
   height: 100%;
   border-radius: inherit;
+}
+
+.bar-fill.mismatch {
+  background: #d95344;
+}
+
+.bar-fill.blank {
+  background: #9aa8a4;
+}
+
+.quality-overview {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) repeat(2, minmax(180px, 1fr));
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.quality-overview > div {
+  border: 1px solid #dce4df;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 16px;
+}
+
+.quality-group-key {
+  display: grid;
+  gap: 3px;
+  color: #637370;
+  font-weight: 800;
+}
+
+.quality-group-key strong {
+  color: #173f3b;
+  font-size: 1.65rem;
+  line-height: 1;
+}
+
+.quality-chart {
+  display: grid;
+  gap: 14px;
+  padding: 18px 16px 10px;
+}
+
+.quality-bar-row {
+  display: grid;
+  grid-template-columns: 140px minmax(120px, 1fr) 70px;
+  gap: 12px;
+  align-items: center;
+}
+
+.quality-bar-row span {
+  color: #3c4d4b;
+  font-weight: 800;
+}
+
+.quality-bar-row strong {
+  text-align: right;
+}
+
+.quality-track {
+  display: flex;
+  gap: 2px;
+}
+
+.quality-track .bar-fill {
+  border-radius: 0;
+}
+
+.quality-track .bar-fill:first-child {
+  border-radius: 99px 0 0 99px;
+}
+
+.quality-track .bar-fill:last-child {
+  border-radius: 0 99px 99px 0;
+}
+
+.quality-legend {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 0 16px 16px;
+  color: #526360;
+  font-size: 0.88rem;
+  font-weight: 800;
+}
+
+.quality-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.legend-swatch {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+}
+
+.legend-swatch.mismatch {
+  background: #d95344;
+}
+
+.legend-swatch.blank {
+  background: #9aa8a4;
+}
+
+.quality-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 20px;
+}
+
+.quality-card {
+  border: 1px solid #dce4df;
+  border-radius: 8px;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.quality-card header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid #edf1ef;
+  padding: 14px 16px;
+}
+
+.quality-card header span {
+  color: #637370;
+  font-size: 0.88rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.quality-card-group {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+}
+
+.quality-card-group + .quality-card-group {
+  border-top: 1px solid #edf1ef;
+}
+
+.quality-card-group p {
+  margin: 0;
+  color: #526360;
+  font-size: 0.88rem;
+  font-weight: 900;
+}
+
+.quality-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.quality-metrics button {
+  display: grid;
+  gap: 3px;
+  min-height: 64px;
+  border: 1px solid #cdd9d4;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #253a38;
+  padding: 10px;
+  text-align: left;
+}
+
+.quality-metrics button:hover:not(:disabled),
+.quality-metrics button:focus:not(:disabled) {
+  border-color: #23755e;
+  background: #f1f7f4;
+  outline: none;
+}
+
+.quality-metrics button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.quality-metrics span {
+  color: #637370;
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.quality-metrics strong {
+  color: #172826;
+  font-size: 1.4rem;
+  line-height: 1;
 }
 
 .audit-page {
@@ -720,6 +944,8 @@ tbody tr:focus {
   .field-grid,
   .summary-toolbar,
   .summary-grid,
+  .quality-overview,
+  .quality-grid,
   .date-field,
   .combo-field {
     grid-template-columns: 1fr;
@@ -739,6 +965,15 @@ tbody tr:focus {
   .bar-row {
     grid-template-columns: 1fr;
     gap: 6px;
+  }
+
+  .quality-bar-row {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .quality-bar-row strong {
+    text-align: left;
   }
 
   .audit-entry-header,

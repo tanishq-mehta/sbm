@@ -5,6 +5,7 @@ import {
   deletePerson,
   dropdownOptions,
   fields,
+  getDataQualitySummary,
   getPerson,
   getLocationOptions,
   getVerificationSummary,
@@ -12,6 +13,7 @@ import {
   listAuditLogs,
   listAllAuditLogs,
   listAllPeople,
+  listDataQualityPeople,
   listPeople,
   renumberSerialNumbers,
   restorePersonFromAudit,
@@ -195,6 +197,20 @@ export async function handleApiRequest(req, res) {
     if (url.pathname === "/api/summary" && req.method === "GET") {
       const department = url.searchParams.get("department") || "";
       sendJson(res, 200, await getVerificationSummary({ department }));
+      return;
+    }
+
+    if (url.pathname === "/api/summary/data-quality" && req.method === "GET") {
+      sendJson(res, 200, await getDataQualitySummary());
+      return;
+    }
+
+    if (url.pathname === "/api/summary/data-quality/people" && req.method === "GET") {
+      sendJson(res, 200, await listDataQualityPeople({
+        field: url.searchParams.get("field") || "",
+        issue: url.searchParams.get("issue") || "",
+        group: url.searchParams.get("group") || "",
+      }));
       return;
     }
 

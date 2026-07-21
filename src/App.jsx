@@ -140,16 +140,18 @@ export default function App() {
     <Shell onLogout={handleLogout} user={user}>
       {route.name === "audit" ? (
         <AuditPage token={token} canManageUsers={canManageUsers} />
+      ) : route.name === "data-quality-list" ? (
+        <DataQualityListPage token={token} route={route} />
       ) : route.name === "summary" ? (
-        <SummaryPage token={token} />
+        <SummaryPage token={token} initialTab={route.tab} />
       ) : route.name === "new-person" ? (
         canManageUsers ? (
-          <PersonPage token={token} isNew canManageUsers />
+          <PersonPage token={token} isNew canManageUsers returnTo={route.returnTo} />
         ) : (
           <ForbiddenPage />
         )
       ) : route.name === "person" ? (
-        <PersonPage id={route.id} token={token} canManageUsers={canManageUsers} />
+        <PersonPage id={route.id} token={token} canManageUsers={canManageUsers} returnTo={route.returnTo} />
       ) : (
         <HomePage token={token} canManageUsers={canManageUsers} />
       )}
@@ -593,7 +595,52 @@ function AuditPage({ token, canManageUsers }) {
   );
 }
 
-function SummaryPage({ token }) {
+function SummaryPage({ token, initialTab = "verification" }) {
+  const [activeTab, setActiveTab] = useState(initialTab === "dataQuality" ? "dataQuality" : "verification");
+
+  return (
+    <main className="page summary-page">
+      <section className="page-heading">
+        <div>
+          <p className="eyebrow">Summary</p>
+          <h1>{activeTab === "verification" ? "Verification status" : "Dropdown data quality"}</h1>
+        </div>
+        <button className="secondary-button" onClick={() => (window.location.hash = "#/home")}>
+          Back to search
+        </button>
+      </section>
+
+      <div className="summary-tabs" role="tablist" aria-label="Summary sections">
+        <button
+          type="button"
+          className={activeTab === "verification" ? "active" : ""}
+          onClick={() => setActiveTab("verification")}
+          role="tab"
+          aria-selected={activeTab === "verification"}
+        >
+          Verification
+        </button>
+        <button
+          type="button"
+          className={activeTab === "dataQuality" ? "active" : ""}
+          onClick={() => setActiveTab("dataQuality")}
+          role="tab"
+          aria-selected={activeTab === "dataQuality"}
+        >
+          Dropdown quality
+        </button>
+      </div>
+
+      {activeTab === "verification" ? (
+        <VerificationSummaryTab token={token} />
+      ) : (
+        <DataQualitySummaryTab token={token} />
+      )}
+    </main>
+  );
+}
+
+function VerificationSummaryTab({ token }) {
   const [department, setDepartment] = useState("");
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -623,17 +670,7 @@ function SummaryPage({ token }) {
   const rows = summary ? statusRows(summary.counts) : [];
 
   return (
-    <main className="page summary-page">
-      <section className="page-heading">
-        <div>
-          <p className="eyebrow">Verification summary</p>
-          <h1>Verification status</h1>
-        </div>
-        <button className="secondary-button" onClick={() => (window.location.hash = "#/home")}>
-          Back to search
-        </button>
-      </section>
-
+    <>
       <section className="summary-toolbar">
         <label>
           <span>Department</span>
@@ -720,11 +757,223 @@ function SummaryPage({ token }) {
           </section>
         </>
       ) : null}
+    </>
+  );
+}
+
+function DataQualitySummaryTab({ token }) {
+  const [summary, setSummary] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError("");
+    apiFetch("/api/summary/data-quality", { token })
+      .then((payload) => {
+        if (!cancelled) setSummary(payload);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
+  const fields = summary?.fields || [];
+  const maxTotal = Math.max(
+    1,
+    ...fields.map((field) => dataQualityFieldTotal(field))
+  );
+
+  return (
+    <>
+      {error ? <p className="form-error wide">{error}</p> : null}
+      {loading ? <p className="empty-state">Loading dropdown quality...</p> : null}
+
+      {summary && !loading ? (
+        <>
+          <section className="quality-overview">
+            <div className="summary-total">
+              <span>Total people</span>
+              <strong>{summary.totalPeople}</strong>
+            </div>
+            {(summary.groups || []).map((group) => (
+              <div className="quality-group-key" key={group.key}>
+                <span>{group.label}</span>
+                <strong>{dataQualityGroupTotal(fields, group.key)}</strong>
+              </div>
+            ))}
+          </section>
+
+          <section className="chart-panel">
+            <div className="results-header">
+              <h2>Issue volume by field</h2>
+              <span>Blank and mismatching dropdown values</span>
+            </div>
+            <div className="quality-chart">
+              {fields.map((field) => (
+                <div className="quality-bar-row" key={field.key}>
+                  <span>{field.label}</span>
+                  <div className="bar-track quality-track" aria-label={`${field.label} issue count`}>
+                    <div
+                      className="bar-fill mismatch"
+                      style={{ width: `${qualityPercent(field.totals?.mismatch || 0, maxTotal)}%` }}
+                    />
+                    <div
+                      className="bar-fill blank"
+                      style={{ width: `${qualityPercent(field.totals?.blank || 0, maxTotal)}%` }}
+                    />
+                  </div>
+                  <strong>{dataQualityFieldTotal(field)}</strong>
+                </div>
+              ))}
+            </div>
+            <div className="quality-legend">
+              <span><i className="legend-swatch mismatch" /> Mismatching</span>
+              <span><i className="legend-swatch blank" /> Blank</span>
+            </div>
+          </section>
+
+          <section className="quality-grid">
+            {fields.map((field) => (
+              <article className="quality-card" key={field.key}>
+                <header>
+                  <h2>{field.label}</h2>
+                  <span>{dataQualityFieldTotal(field)} issues</span>
+                </header>
+                {(summary.groups || []).map((group) => (
+                  <div className="quality-card-group" key={group.key}>
+                    <p>{group.label}</p>
+                    <div className="quality-metrics">
+                      {["mismatch", "blank"].map((issue) => (
+                        <button
+                          type="button"
+                          key={issue}
+                          onClick={() => openDataQualityList(field.key, issue, group.key)}
+                          disabled={!field.groups?.[group.key]?.[issue]}
+                        >
+                          <span>{issue === "mismatch" ? "Mismatching" : "Blank"}</span>
+                          <strong>{field.groups?.[group.key]?.[issue] || 0}</strong>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </article>
+            ))}
+          </section>
+        </>
+      ) : null}
+    </>
+  );
+}
+
+function DataQualityListPage({ token, route }) {
+  const [payload, setPayload] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError("");
+    const params = new URLSearchParams({
+      field: route.field || "",
+      issue: route.issue || "",
+      group: route.group || "",
+    });
+    apiFetch(`/api/summary/data-quality/people?${params.toString()}`, { token })
+      .then((nextPayload) => {
+        if (!cancelled) setPayload(nextPayload);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [route.field, route.group, route.issue, token]);
+
+  const title = payload
+    ? `${payload.issue.label} ${payload.field.label}`
+    : "Dropdown issue list";
+  const currentHash = window.location.hash || "#/summary/data-quality";
+
+  return (
+    <main className="page">
+      <section className="page-heading">
+        <div>
+          <p className="eyebrow">Dropdown quality drilldown</p>
+          <h1>{title}</h1>
+          {payload ? <p className="page-subtitle">{payload.group.label}</p> : null}
+        </div>
+        <button className="secondary-button" onClick={() => (window.location.hash = "#/summary?tab=dataQuality")}>
+          Back to summary
+        </button>
+      </section>
+
+      {error ? <p className="form-error wide">{error}</p> : null}
+      {loading ? <p className="empty-state">Loading people...</p> : null}
+
+      {payload && !loading ? (
+        <section className="results-panel">
+          <div className="results-header">
+            <h2>People to review</h2>
+            <span>{payload.total} user{payload.total === 1 ? "" : "s"}</span>
+          </div>
+          {payload.results.length ? (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Badge number</th>
+                    <th>Verification</th>
+                    <th>Issue</th>
+                    <th>Department</th>
+                    <th>Phone number</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {payload.results.map((person) => (
+                    <tr
+                      key={person.id}
+                      tabIndex={0}
+                      onClick={() => openPersonFromDataQuality(person.id, currentHash)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") openPersonFromDataQuality(person.id, currentHash);
+                      }}
+                    >
+                      <td><strong>{person.name}</strong></td>
+                      <td>{person.badgeNo || "-"}</td>
+                      <td>{person.verificationStatus || "-"}</td>
+                      <td>{formatIssueDetails(person.issueDetails)}</td>
+                      <td>{person.department || "-"}</td>
+                      <td>{person.phoneNumber || "-"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="empty-state">No users currently match this subgroup.</p>
+          )}
+        </section>
+      ) : null}
     </main>
   );
 }
 
-function PersonPage({ id, token, isNew = false, canManageUsers = false }) {
+function PersonPage({ id, token, isNew = false, canManageUsers = false, returnTo = "" }) {
   const [person, setPerson] = useState(null);
   const [fields, setFields] = useState([]);
   const [dropdownOptions, setDropdownOptions] = useState({});
@@ -790,6 +1039,7 @@ function PersonPage({ id, token, isNew = false, canManageUsers = false }) {
   }, [formData.State, formData.District, token]);
 
   const groupedSections = useMemo(() => buildSections(fields), [fields]);
+  const backTarget = returnTo || "#/home";
 
   function updateField(field, value) {
     setFormData((current) => ({ ...current, [field]: value }));
@@ -818,7 +1068,7 @@ function PersonPage({ id, token, isNew = false, canManageUsers = false }) {
       });
       setPerson(updated);
       setFormData(updated.data || {});
-      window.location.hash = "#/home";
+      window.location.hash = backTarget;
     } catch (err) {
       setError(err.message);
     } finally {
@@ -838,7 +1088,7 @@ function PersonPage({ id, token, isNew = false, canManageUsers = false }) {
         method: "DELETE",
         token,
       });
-      window.location.hash = "#/home";
+      window.location.hash = backTarget;
     } catch (err) {
       setError(err.message);
     } finally {
@@ -868,7 +1118,7 @@ function PersonPage({ id, token, isNew = false, canManageUsers = false }) {
   return (
     <main className="page detail-page">
       <section className="record-header">
-        <button className="secondary-button compact" onClick={() => (window.location.hash = "#/home")}>
+        <button className="secondary-button compact" onClick={() => (window.location.hash = backTarget)}>
           Back
         </button>
         <div>
@@ -919,7 +1169,7 @@ function PersonPage({ id, token, isNew = false, canManageUsers = false }) {
         {notice ? <p className="form-success">{notice}</p> : null}
 
         <div className="form-actions">
-          <button type="button" className="secondary-button" onClick={() => (window.location.hash = "#/home")}>
+          <button type="button" className="secondary-button" onClick={() => (window.location.hash = backTarget)}>
             Cancel
           </button>
           <button type="submit" className="primary-button" disabled={saving || deleting}>
@@ -1038,12 +1288,38 @@ async function downloadWorkbook(path, token, fallbackFilename) {
 
 function readRoute() {
   const hash = window.location.hash || "#/home";
-  if (hash === "#/people/new") return { name: "new-person" };
-  const personMatch = hash.match(/^#\/people\/(\d+)$/);
-  if (personMatch) return { name: "person", id: personMatch[1] };
-  if (hash === "#/audit") return { name: "audit" };
-  if (hash === "#/summary") return { name: "summary" };
+  const [path, queryString = ""] = hash.split("?");
+  const params = new URLSearchParams(queryString);
+  const returnTo = safeReturnTo(params.get("returnTo"));
+
+  if (path === "#/people/new") return { name: "new-person", returnTo };
+  const personMatch = path.match(/^#\/people\/(\d+)$/);
+  if (personMatch) return { name: "person", id: personMatch[1], returnTo };
+  if (path === "#/audit") return { name: "audit" };
+  if (path === "#/summary/data-quality") {
+    return {
+      name: "data-quality-list",
+      field: params.get("field") || "",
+      issue: params.get("issue") || "",
+      group: params.get("group") || "",
+    };
+  }
+  if (path === "#/summary") return { name: "summary", tab: params.get("tab") || "" };
   return { name: "home" };
+}
+
+function safeReturnTo(value) {
+  const decoded = String(value || "");
+  return decoded.startsWith("#/") ? decoded : "";
+}
+
+function openDataQualityList(field, issue, group) {
+  const params = new URLSearchParams({ field, issue, group });
+  window.location.hash = `#/summary/data-quality?${params.toString()}`;
+}
+
+function openPersonFromDataQuality(id, returnHash) {
+  window.location.hash = `#/people/${id}?returnTo=${encodeURIComponent(returnHash)}`;
 }
 
 function buildSections(fields) {
@@ -1162,6 +1438,32 @@ function statusRows(counts = {}) {
 function barPercent(value, rows) {
   const max = Math.max(1, ...rows.map((row) => row.value));
   return Math.max(2, (value / max) * 100);
+}
+
+function dataQualityFieldTotal(field) {
+  return (field.totals?.mismatch || 0) + (field.totals?.blank || 0);
+}
+
+function dataQualityGroupTotal(fields, groupKey) {
+  return fields.reduce(
+    (total, field) =>
+      total +
+      (field.groups?.[groupKey]?.mismatch || 0) +
+      (field.groups?.[groupKey]?.blank || 0),
+    0
+  );
+}
+
+function qualityPercent(value, maxTotal) {
+  if (!value) return 0;
+  return Math.max(2, (value / Math.max(1, maxTotal)) * 100);
+}
+
+function formatIssueDetails(details = []) {
+  if (!details.length) return "-";
+  return details
+    .map((detail) => `${detail.field}: ${displayAuditValue(detail.value)}`)
+    .join("; ");
 }
 
 function displayAuditValue(value) {
