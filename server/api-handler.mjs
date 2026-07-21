@@ -444,7 +444,7 @@ function sbmExportCellValue(person, field) {
 
   if (field === "Address Line 1" && newAddress) return newAddress;
   if (field === "Address Line 2" && newAddress) return "";
-  if (field === "Photo File Name") return data["S No"] || "";
+  if (field === "Photo File Name") return data["Badge no."] || person.badgeNo || "";
   if (field === "Initiation Place") return data.INITIATION_PLACE || "";
 
   return data[field] || "";
