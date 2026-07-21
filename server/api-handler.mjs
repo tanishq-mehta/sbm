@@ -15,6 +15,7 @@ import {
   listPeople,
   renumberSerialNumbers,
   restorePersonFromAudit,
+  sbmExportFields,
   searchableFields,
   updatePerson,
 } from "./database.mjs";
@@ -132,6 +133,29 @@ export async function handleApiRequest(req, res) {
       res.writeHead(200, {
         "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "Content-Disposition": `attachment; filename="sbm-users-${date}.xlsx"`,
+        "Content-Length": workbook.length,
+        "Cache-Control": "no-store",
+      });
+      res.end(workbook);
+      return;
+    }
+
+    if (url.pathname === "/api/export/sbm-pr.xlsx" && req.method === "GET") {
+      const people = (await listAllPeople())
+        .filter(isPrPerson)
+        .sort(compareByPrSerialNumber);
+      const rows = people.map((person) =>
+        sbmExportFields.map((field) => sbmExportCellValue(person, field))
+      );
+      const workbook = createWorkbookBuffer({
+        sheetName: "Data",
+        headers: sbmExportFields,
+        rows,
+      });
+      const date = new Date().toISOString().slice(0, 10);
+      res.writeHead(200, {
+        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Content-Disposition": `attachment; filename="sbm-pr-sewadars-${date}.xlsx"`,
         "Content-Length": workbook.length,
         "Cache-Control": "no-store",
       });
@@ -389,6 +413,41 @@ function auditWorkbookRows(audits) {
       auditCellValue(values?.new),
     ]);
   });
+}
+
+function isPrPerson(person) {
+  return String(person.data?.["Badge no."] || person.badgeNo || "")
+    .trim()
+    .toUpperCase()
+    .startsWith("PR");
+}
+
+function compareByPrSerialNumber(left, right) {
+  const leftSerial = prSerialNumber(left.data?.["S No"]);
+  const rightSerial = prSerialNumber(right.data?.["S No"]);
+  if (leftSerial !== rightSerial) return leftSerial - rightSerial;
+  return String(left.data?.["Badge no."] || left.badgeNo || "").localeCompare(
+    String(right.data?.["Badge no."] || right.badgeNo || ""),
+    "en",
+    { numeric: true, sensitivity: "base" }
+  );
+}
+
+function prSerialNumber(value) {
+  const serial = String(value || "").trim();
+  return /^\d+$/.test(serial) ? Number(serial) : Number.MAX_SAFE_INTEGER;
+}
+
+function sbmExportCellValue(person, field) {
+  const data = person.data || {};
+  const newAddress = String(data["New Address"] || "").trim();
+
+  if (field === "Address Line 1" && newAddress) return newAddress;
+  if (field === "Address Line 2" && newAddress) return "";
+  if (field === "Photo File Name") return data["S No"] || "";
+  if (field === "Initiation Place") return data.INITIATION_PLACE || "";
+
+  return data[field] || "";
 }
 
 function formatAuditTimestamp(value) {

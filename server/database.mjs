@@ -16,9 +16,13 @@ const fieldsPath = path.join(dataDir, "fields.json");
 const seedPath = path.join(dataDir, "people-seed.json");
 const dropdownOptionsPath = path.join(dataDir, "dropdown-options.json");
 const locationOptionsPath = path.join(dataDir, "location-options.json");
+const sbmExportFieldsPath = path.join(dataDir, "sbm-export-fields.json");
 
 export const fields = JSON.parse(fs.readFileSync(fieldsPath, "utf8"));
 export const searchableFields = ["All fields", ...fields];
+export const sbmExportFields = fs.existsSync(sbmExportFieldsPath)
+  ? JSON.parse(fs.readFileSync(sbmExportFieldsPath, "utf8"))
+  : [];
 export const dropdownOptions = fs.existsSync(dropdownOptionsPath)
   ? JSON.parse(fs.readFileSync(dropdownOptionsPath, "utf8"))
   : {};

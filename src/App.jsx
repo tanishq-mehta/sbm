@@ -277,6 +277,7 @@ function HomePage({ token, canManageUsers }) {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [downloadingSbm, setDownloadingSbm] = useState(false);
   const [error, setError] = useState("");
   const [searched, setSearched] = useState(false);
 
@@ -310,26 +311,23 @@ function HomePage({ token, canManageUsers }) {
     setDownloading(true);
     setError("");
     try {
-      const response = await fetch("/api/export/people.xlsx", {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!response.ok) {
-        const payload = await response.json();
-        throw new Error(payload.message || "Download failed.");
-      }
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = filenameFromDisposition(response.headers.get("Content-Disposition"));
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
+      await downloadWorkbook("/api/export/people.xlsx", token, "sbm-users.xlsx");
     } catch (err) {
       setError(err.message);
     } finally {
       setDownloading(false);
+    }
+  }
+
+  async function downloadSbmExcel() {
+    setDownloadingSbm(true);
+    setError("");
+    try {
+      await downloadWorkbook("/api/export/sbm-pr.xlsx", token, "sbm-pr-sewadars.xlsx");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setDownloadingSbm(false);
     }
   }
 
@@ -354,6 +352,9 @@ function HomePage({ token, canManageUsers }) {
           </button>
           <button className="secondary-button" onClick={downloadExcel} disabled={downloading}>
             {downloading ? "Preparing..." : "Download latest Excel"}
+          </button>
+          <button className="secondary-button" onClick={downloadSbmExcel} disabled={downloadingSbm}>
+            {downloadingSbm ? "Preparing..." : "Download SBM Excel"}
           </button>
           <p className="record-count">{fields.length} fields available</p>
         </div>
@@ -1014,6 +1015,25 @@ async function apiFetch(path, { token, method = "GET", body } = {}) {
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.message || "Request failed.");
   return payload;
+}
+
+async function downloadWorkbook(path, token, fallbackFilename) {
+  const response = await fetch(path, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const payload = await response.json();
+    throw new Error(payload.message || "Download failed.");
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filenameFromDisposition(response.headers.get("Content-Disposition"), fallbackFilename);
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 function readRoute() {
