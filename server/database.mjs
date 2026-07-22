@@ -583,7 +583,7 @@ export async function getVerificationSummary({ department = "" } = {}) {
 
 export async function getDataQualitySummary() {
   await initializeDatabase();
-  const people = (await getAllPersonRows()).map(rowToPerson);
+  const people = (await getAllPersonRows()).map(rowToPerson).filter(isPrBadgePerson);
   const fieldsSummary = dataQualityFields.map(emptyDataQualityFieldSummary);
   const fieldsByKey = new Map(fieldsSummary.map((field) => [field.key, field]));
   const optionSets = dataQualityOptionSets();
@@ -620,7 +620,7 @@ export async function listDataQualityPeople({ field, issue, group } = {}) {
   if (!issueType) throw statusError(400, "Unknown data quality issue.");
   if (!groupDefinition) throw statusError(400, "Unknown verification group.");
 
-  const people = (await getAllPersonRows()).map(rowToPerson);
+  const people = (await getAllPersonRows()).map(rowToPerson).filter(isPrBadgePerson);
   const validOptions = dataQualityOptionSets().get(fieldDefinition.key) || new Set();
   const results = [];
 
@@ -1768,6 +1768,10 @@ function emptyDataQualityFieldSummary(definition) {
 
 function dataQualityGroupForPerson(person) {
   return dataQualityGroupForStatus(normalizeVerificationValue(person.data?.[verificationField]));
+}
+
+function isPrBadgePerson(person) {
+  return normalizeValue(person.data?.[badgeField] || person.badgeNo).toUpperCase().startsWith("PR");
 }
 
 function dataQualityGroupForStatus(status) {
