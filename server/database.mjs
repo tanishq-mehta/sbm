@@ -91,6 +91,11 @@ const dataQualityFields = [
     fields: ["Educational Qualification"],
   },
   {
+    key: "majorCentre",
+    label: "Major Centre",
+    fields: ["Sewa Dept - Major Centre"],
+  },
+  {
     key: "state",
     label: "State",
     fields: ["State"],
