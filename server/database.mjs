@@ -280,6 +280,7 @@ export async function normalizeVerificationValues() {
 export async function normalizeDepartmentValues(options = {}) {
   await initializeDatabase({ seedIfEmpty: false });
   const changedBy = normalizeChangedBy(options.changedBy || "system-department-normalization");
+  const requestedBatchSize = Number(options.batchSize);
 
   if (databaseProvider === "postgres") {
     const rows = (
@@ -298,11 +299,12 @@ export async function normalizeDepartmentValues(options = {}) {
           : null;
       })
       .filter(Boolean);
+    const selectedUpdates = departmentNormalizationBatch(updates, requestedBatchSize);
 
     const client = await getPool().connect();
     try {
       await client.query("BEGIN");
-      for (const update of updates) {
+      for (const update of selectedUpdates) {
         await client.query(
           `
             UPDATE people
@@ -347,7 +349,7 @@ export async function normalizeDepartmentValues(options = {}) {
       client.release();
     }
 
-    return updates.length;
+    return departmentNormalizationResult(updates.length, selectedUpdates.length, options.returnSummary);
   }
 
   const db = getSqlite();
@@ -365,6 +367,7 @@ export async function normalizeDepartmentValues(options = {}) {
         : null;
     })
     .filter(Boolean);
+  const selectedUpdates = departmentNormalizationBatch(updates, requestedBatchSize);
   const updatePersonRecord = db.prepare(`
     UPDATE people
     SET full_name = ?,
@@ -382,7 +385,7 @@ export async function normalizeDepartmentValues(options = {}) {
 
   db.exec("BEGIN");
   try {
-    for (const update of updates) {
+    for (const update of selectedUpdates) {
       updatePersonRecord.run(
         update.summary.fullName,
         update.summary.badgeNo,
@@ -407,7 +410,7 @@ export async function normalizeDepartmentValues(options = {}) {
     throw error;
   }
 
-  return updates.length;
+  return departmentNormalizationResult(updates.length, selectedUpdates.length, options.returnSummary);
 }
 
 export async function renumberSerialNumbers(options = {}) {
@@ -1360,6 +1363,19 @@ function departmentRecordNeedsUpdate(person, summary, change) {
     normalizeValue(person.department) !== normalizeValue(summary.department) ||
     normalizeValue(person.phoneNumber) !== normalizeValue(summary.phoneNumber)
   );
+}
+
+function departmentNormalizationBatch(updates, requestedBatchSize) {
+  if (!Number.isFinite(requestedBatchSize) || requestedBatchSize <= 0) return updates;
+  return updates.slice(0, Math.min(Math.floor(requestedBatchSize), 250));
+}
+
+function departmentNormalizationResult(totalPending, updated, returnSummary = false) {
+  if (!returnSummary) return updated;
+  return {
+    updated,
+    remaining: Math.max(0, totalPending - updated),
+  };
 }
 
 function normalizeValue(value) {

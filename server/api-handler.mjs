@@ -226,10 +226,13 @@ export async function handleApiRequest(req, res) {
     }
 
     if (url.pathname === "/api/admin/normalize-departments" && req.method === "POST") {
-      const updated = await normalizeDepartmentValues({
+      const body = await readJson(req);
+      const result = await normalizeDepartmentValues({
+        batchSize: body.batchSize,
         changedBy: authenticatedUser.username,
+        returnSummary: true,
       });
-      sendJson(res, 200, { updated });
+      sendJson(res, 200, result);
       return;
     }
 
