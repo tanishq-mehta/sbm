@@ -35,10 +35,13 @@ const serialField = "S No";
 const badgeField = "Badge no.";
 const statusField = "Status";
 const verificationField = "Verification Status";
+const genderField = "Gender";
+const localCentreField = "Sewa Dept - Local Centre";
+const majorCentreField = "Sewa Dept - Major Centre";
 const verificationOptions = ["None", "Verification Done", "Rectification Done"];
 const statusOptions = ["PERMANENT", "OPEN", "ELDERLY", "NEW", "NI", "ESS", "VSS"];
 const dateFields = new Set(["Birth Date", "Initiation Date"]);
-const departmentFields = new Set(["Sewa Dept - Local Centre", "Sewa Dept - Major Centre"]);
+const departmentFields = new Set([localCentreField, majorCentreField]);
 const placeholderTextFields = new Set(["Profession", "Educational Qualification"]);
 const placeholderTextValues = new Set([
   "na",
@@ -118,6 +121,40 @@ const dataQualityGroupByStatus = new Map(
     [...group.statuses].map((status) => [status, group])
   )
 );
+const blankMajorCentreDepartmentKeys = new Set([
+  "ACCOUNTS",
+  "BAAL PATHI",
+  "I.T.",
+  "IT",
+  "LANGAR",
+  "OFFICE",
+  "PURCHASE",
+  "ZONAL OFFICE",
+]);
+const directMajorCentreDepartmentMappings = new Map([
+  ["ADMINISTRATION", "ADMINISTRATION"],
+  ["AUDIO-VISUAL", "AUDIO-VISUAL"],
+  ["AUDIOVISUAL", "AUDIO-VISUAL"],
+  ["BAAL SATSANG", "PANDAL"],
+  ["BAV", "PANDAL"],
+  ["CANTEEN", "CANTEEN"],
+  ["COUPON", "COUPON"],
+  ["ELECTRIC", "ELECTRIC"],
+  ["ENGLISH SATSANG", "PANDAL"],
+  ["FOREIGNERS RECEPTION", "SEWA COLLECTION"],
+  ["GUEST HOUSE", "SEWA COLLECTION"],
+  ["MEDICAL", "MEDICAL"],
+  ["MAINTENANCE", "SECURITY"],
+  ["PAINTING", "SECURITY"],
+  ["PANDAL", "PANDAL"],
+  ["PATHI", "PATHI"],
+  ["SANITATION", "SANITATION"],
+  ["SECURITY", "SECURITY"],
+  ["SEWA COLLECTION", "SEWA COLLECTION"],
+  ["SEWA SAMITI", "SEWA SAMITI"],
+  ["TRAFFIC", "TRAFFIC"],
+  ["WATER", "WATER"],
+]);
 
 let dataQualityOptionSetsCache;
 
@@ -389,6 +426,87 @@ export async function importStatusValues(rows = [], options = {}) {
   return statusImportResult(plan, selectedUpdates.length, source, options.returnSummary);
 }
 
+export async function mapMajorCentresFromDepartments(options = {}) {
+  await initializeDatabase({ seedIfEmpty: false });
+  const changedBy = normalizeChangedBy(options.changedBy || "system-major-centre-mapping");
+  const requestedBatchSize = Number(options.batchSize);
+  const dryRun = Boolean(options.dryRun);
+  const prOnly = options.prOnly !== false;
+  const people = (await getAllPersonRows())
+    .map(rowToPerson)
+    .filter((person) => !prOnly || isPrBadgePerson(person));
+  const plan = buildMajorCentreMappingPlan(people);
+  const selectedUpdates = majorCentreMappingBatch(plan.updates, requestedBatchSize);
+
+  if (dryRun) {
+    return majorCentreMappingResult(plan, 0, {
+      returnSummary: options.returnSummary,
+      prOnly,
+    });
+  }
+
+  if (databaseProvider === "postgres" && selectedUpdates.length) {
+    const client = await getPool().connect();
+    try {
+      await client.query("BEGIN");
+      await applyPersonUpdateBatchPostgres(client, selectedUpdates, changedBy);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  } else if (selectedUpdates.length) {
+    const db = getSqlite();
+    const updatePersonRecord = db.prepare(`
+      UPDATE people
+      SET full_name = ?,
+          badge_no = ?,
+          department = ?,
+          phone_number = ?,
+          data = ?,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+        AND deleted_at IS NULL
+    `);
+    const insertAudit = db.prepare(`
+      INSERT INTO audit_logs (person_id, name, badge_no, changed_by, action, "change")
+      VALUES (?, ?, ?, ?, 'update', ?)
+    `);
+
+    db.exec("BEGIN");
+    try {
+      for (const update of selectedUpdates) {
+        updatePersonRecord.run(
+          update.summary.fullName,
+          update.summary.badgeNo,
+          update.summary.department,
+          update.summary.phoneNumber,
+          JSON.stringify(update.data),
+          update.person.id
+        );
+        insertAudit.run(
+          update.person.id,
+          update.summary.fullName,
+          update.summary.badgeNo,
+          changedBy,
+          JSON.stringify(update.change)
+        );
+      }
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  return majorCentreMappingResult(plan, selectedUpdates.length, {
+    returnSummary: options.returnSummary,
+    prOnly,
+  });
+}
+
 export async function normalizeVerificationValues() {
   await initializeDatabase({ seedIfEmpty: false });
 
@@ -634,7 +752,7 @@ export async function renumberSerialNumbers(options = {}) {
     try {
       await client.query("BEGIN");
       for (let start = 0; start < updates.length; start += batchSize) {
-        await applySerialNumberBatchPostgres(
+        await applyPersonUpdateBatchPostgres(
           client,
           updates.slice(start, start + batchSize),
           changedBy
@@ -1607,6 +1725,202 @@ function placeholderTextCleanupResult(totalPending, updated, returnSummary = fal
   };
 }
 
+function buildMajorCentreMappingPlan(people) {
+  const plan = {
+    totalPeople: people.length,
+    updates: [],
+    alreadySet: [],
+    leftBlank: [],
+    skipped: [],
+  };
+  const validMajorCentreOptions = new Set(dropdownOptions[majorCentreField] || []);
+
+  for (const person of people) {
+    const originalData = person.data || {};
+    const currentMajorCentre = normalizeValue(originalData[majorCentreField]);
+    const status = normalizeStatusValue(originalData[statusField]);
+    const department = normalizeDepartmentValue(originalData[localCentreField] || person.department);
+    const gender = normalizeValue(originalData[genderField]);
+
+    if (status === "ELDERLY") {
+      if (currentMajorCentre) {
+        addMajorCentreUpdate(plan, person, "", "Status is ELDERLY, so Major Centre must remain blank");
+      } else {
+        plan.leftBlank.push(majorCentrePlanPreview(person, {
+          department,
+          gender,
+          status,
+          reason: "Status is ELDERLY",
+        }));
+      }
+      continue;
+    }
+
+    if (currentMajorCentre) {
+      plan.alreadySet.push(majorCentrePlanPreview(person, {
+        department,
+        gender,
+        status,
+        targetValue: currentMajorCentre,
+        reason: "Major Centre already set",
+      }));
+      continue;
+    }
+
+    const targetValue = majorCentreForDepartment(department, gender);
+    if (!targetValue) {
+      plan.leftBlank.push(majorCentrePlanPreview(person, {
+        department,
+        gender,
+        status,
+        reason: majorCentreDepartmentMapsBlank(department)
+          ? "Department maps to blank"
+          : "No department mapping",
+      }));
+      continue;
+    }
+
+    if (!validMajorCentreOptions.has(targetValue)) {
+      plan.skipped.push(majorCentrePlanPreview(person, {
+        department,
+        gender,
+        status,
+        targetValue,
+        reason: "Target value is not present in Major Centre dropdown options",
+      }));
+      continue;
+    }
+
+    addMajorCentreUpdate(plan, person, targetValue, "Department mapping");
+  }
+
+  return plan;
+}
+
+function addMajorCentreUpdate(plan, person, targetValue, reason) {
+  const originalData = person.data || {};
+  const data = cleanData({
+    ...originalData,
+    [majorCentreField]: targetValue,
+  });
+  const change = diffData(originalData, data);
+  if (!Object.keys(change).length) return;
+
+  const department = normalizeDepartmentValue(originalData[localCentreField] || person.department);
+  plan.updates.push({
+    person,
+    data,
+    summary: summarize(data),
+    change,
+    ...majorCentrePlanPreview(person, {
+      department,
+      gender: originalData[genderField],
+      status: normalizeStatusValue(originalData[statusField]),
+      expectedValue: normalizeValue(originalData[majorCentreField]),
+      targetValue,
+      reason,
+    }),
+  });
+}
+
+function majorCentreMappingBatch(updates, requestedBatchSize) {
+  if (!Number.isFinite(requestedBatchSize) || requestedBatchSize <= 0) return updates;
+  return updates.slice(0, Math.min(Math.floor(requestedBatchSize), 250));
+}
+
+function majorCentreMappingResult(plan, updated, { returnSummary = false, prOnly = true } = {}) {
+  if (!returnSummary) return updated;
+  return {
+    totalPeople: plan.totalPeople,
+    prOnly,
+    updated,
+    remaining: Math.max(0, plan.updates.length - updated),
+    peopleToUpdate: plan.updates.length,
+    alreadySet: plan.alreadySet.length,
+    leftBlank: plan.leftBlank.length,
+    leftBlankReasons: countBy(plan.leftBlank.map((entry) => entry.reason)),
+    skipped: plan.skipped.length,
+    valueChanges: countBy(
+      plan.updates.map((entry) => `${entry.expectedValue || "<blank>"} -> ${entry.targetValue || "<blank>"}`)
+    ),
+    preview: plan.updates.slice(0, 25).map(majorCentreUpdatePreview),
+    leftBlankPreview: plan.leftBlank.slice(0, 25),
+    skippedPreview: plan.skipped.slice(0, 25),
+  };
+}
+
+function countBy(values) {
+  return values.reduce((counts, value) => {
+    counts[value] = (counts[value] || 0) + 1;
+    return counts;
+  }, {});
+}
+
+function majorCentreUpdatePreview(entry) {
+  return {
+    id: entry.id,
+    badgeNo: entry.badgeNo,
+    name: entry.name,
+    department: entry.department,
+    gender: entry.gender,
+    status: entry.status,
+    oldMajorCentre: entry.expectedValue,
+    newMajorCentre: entry.targetValue,
+    reason: entry.reason,
+  };
+}
+
+function majorCentrePlanPreview(person, details = {}) {
+  return {
+    id: Number(person.id),
+    badgeNo: person.badgeNo || person.data?.[badgeField] || "",
+    name: person.fullName || person.name || "",
+    department: normalizeValue(details.department),
+    gender: normalizeValue(details.gender),
+    status: normalizeValue(details.status),
+    expectedValue: normalizeValue(details.expectedValue),
+    targetValue: normalizeValue(details.targetValue),
+    reason: details.reason || "",
+  };
+}
+
+function majorCentreForDepartment(department, gender) {
+  const key = majorCentreDepartmentKey(department);
+  if (!key || blankMajorCentreDepartmentKeys.has(key)) return "";
+  if (key === "HORTICULTURE") {
+    const normalizedGender = normalizeValue(gender).toUpperCase();
+    if (normalizedGender === "FEMALE") return "SEWA COLLECTION";
+    if (normalizedGender === "MALE") return "SECURITY";
+    return "";
+  }
+  return directMajorCentreDepartmentMappings.get(key) || "";
+}
+
+function majorCentreDepartmentMapsBlank(department) {
+  const key = majorCentreDepartmentKey(department);
+  return Boolean(key && blankMajorCentreDepartmentKeys.has(key));
+}
+
+function majorCentreDepartmentKey(value) {
+  const normalized = normalizeValue(value).toUpperCase();
+  const compact = normalized.replace(/[.\s_-]+/g, "");
+
+  if (["ADMIN", "ADMINISTRATION", "ADMINSTRATION"].includes(compact)) return "ADMINISTRATION";
+  if (compact === "AUDIOVISUAL") return "AUDIO-VISUAL";
+  if (compact === "BAALPATHI" || compact === "BALPATHI") return "BAAL PATHI";
+  if (compact === "BAALSATSANG" || compact === "BALSATSANG") return "BAAL SATSANG";
+  if (compact === "BAV") return "BAV";
+  if (compact === "FR" || compact === "FOREIGNERSRECEPTION") return "FOREIGNERS RECEPTION";
+  if (compact === "HRT" || compact === "HORTICULTURE") return "HORTICULTURE";
+  if (compact === "IT") return "I.T.";
+  if (compact === "MNT" || compact === "MAINTENANCE") return "MAINTENANCE";
+  if (compact === "SEVACOLLECTION" || compact === "SEWACOLLECTION") return "SEWA COLLECTION";
+  if (compact === "SEVASAMITI" || compact === "SEWASAMITI") return "SEWA SAMITI";
+  if (compact === "ZONALOFFICE") return "ZONAL OFFICE";
+
+  return normalized;
+}
+
 function normalizeStatusImportRows(rows) {
   if (!Array.isArray(rows)) {
     throw statusError(400, "Status import rows must be an array.");
@@ -2134,7 +2448,7 @@ function statusError(statusCode, message) {
   return Object.assign(new Error(message), { statusCode });
 }
 
-async function applySerialNumberBatchPostgres(client, batch, changedBy) {
+async function applyPersonUpdateBatchPostgres(client, batch, changedBy) {
   const values = [];
   const placeholders = batch.map((update, index) => {
     const offset = index * 7;

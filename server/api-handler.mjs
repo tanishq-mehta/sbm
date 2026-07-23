@@ -18,6 +18,7 @@ import {
   listAllPeople,
   listDataQualityPeople,
   listPeople,
+  mapMajorCentresFromDepartments,
   normalizeDepartmentValues,
   renumberSerialNumbers,
   restorePersonFromAudit,
@@ -272,6 +273,19 @@ export async function handleApiRequest(req, res) {
       return;
     }
 
+    if (url.pathname === "/api/admin/map-major-centres" && req.method === "POST") {
+      const body = await readJson(req);
+      const result = await mapMajorCentresFromDepartments({
+        batchSize: body.batchSize,
+        dryRun: Boolean(body.dryRun),
+        prOnly: body.prOnly !== false,
+        changedBy: authenticatedUser.username,
+        returnSummary: true,
+      });
+      sendJson(res, 200, result);
+      return;
+    }
+
     if (url.pathname === "/api/audits" && req.method === "GET") {
       const limit = url.searchParams.get("limit") || "500";
       sendJson(res, 200, {
@@ -416,6 +430,7 @@ function isAdminOnlyMutation(url, method) {
     (url.pathname === "/api/admin/clean-emails" && method === "POST") ||
     (url.pathname === "/api/admin/clean-placeholder-text" && method === "POST") ||
     (url.pathname === "/api/admin/import-statuses" && method === "POST") ||
+    (url.pathname === "/api/admin/map-major-centres" && method === "POST") ||
     (method === "DELETE" && /^\/api\/people\/\d+$/.test(url.pathname)) ||
     (method === "POST" && /^\/api\/audits\/\d+\/restore$/.test(url.pathname))
   );
@@ -439,6 +454,9 @@ function adminOnlyMessage(url, method) {
   }
   if (url.pathname === "/api/admin/import-statuses" && method === "POST") {
     return "Only admin users can import status values.";
+  }
+  if (url.pathname === "/api/admin/map-major-centres" && method === "POST") {
+    return "Only admin users can map Major Centre values.";
   }
   if (method === "DELETE" && /^\/api\/people\/\d+$/.test(url.pathname)) {
     return "Only admin users can delete users.";
