@@ -81,13 +81,17 @@ def department_value(value: object) -> str:
     normalized = normalize_value(value)
     compact = re.sub(r"[.\s_-]+", "", normalized.lower())
     if compact in {"admin", "administration", "adminstration"}:
-        return "Administration"
+        return "ADMINISTRATION"
     if compact in {"fr", "foreignersreception"}:
-        return "Foreigners Reception"
+        return "FOREIGNERS RECEPTION"
     if compact in {"mnt", "maintenance"}:
-        return "Maintenance"
+        return "MAINTENANCE"
     if compact in {"hrt", "horticulture"}:
         return "HORTICULTURE"
+    if compact in {"es", "englishsatsang"}:
+        return "ENGLISH SATSANG"
+    if compact in {"baalpathi", "balpathi"}:
+        return "BAAL PATHI"
     if compact == "bav":
         return "BAV"
     if compact in {"madical", "medical"}:
@@ -95,10 +99,10 @@ def department_value(value: object) -> str:
     if compact == "sanitation":
         return "SANITATION"
     if compact in {"sevacollection", "sewacollection"}:
-        return "Sewa Collection"
+        return "SEWA COLLECTION"
     if compact in {"sevasamiti", "sewasamiti"}:
-        return "Sewa Samiti"
-    return normalized
+        return "SEWA SAMITI"
+    return normalized.upper()
 
 
 def date_value(value: object) -> str:

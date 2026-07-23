@@ -292,7 +292,10 @@ export async function normalizeDepartmentValues(options = {}) {
       .map((person) => {
         const data = normalizedDepartmentData(person.data || {});
         const change = diffData(person.data, data);
-        return Object.keys(change).length ? { person, data, change, summary: summarize(data) } : null;
+        const summary = summarize(data);
+        return departmentRecordNeedsUpdate(person, summary, change)
+          ? { person, data, change, summary }
+          : null;
       })
       .filter(Boolean);
 
@@ -320,19 +323,21 @@ export async function normalizeDepartmentValues(options = {}) {
             update.person.id,
           ]
         );
-        await client.query(
-          `
-            INSERT INTO audit_logs (person_id, name, badge_no, changed_by, action, "change")
-            VALUES ($1, $2, $3, $4, 'update', $5)
-          `,
-          [
-            update.person.id,
-            update.summary.fullName,
-            update.summary.badgeNo,
-            changedBy,
-            update.change,
-          ]
-        );
+        if (Object.keys(update.change).length) {
+          await client.query(
+            `
+              INSERT INTO audit_logs (person_id, name, badge_no, changed_by, action, "change")
+              VALUES ($1, $2, $3, $4, 'update', $5)
+            `,
+            [
+              update.person.id,
+              update.summary.fullName,
+              update.summary.badgeNo,
+              changedBy,
+              update.change,
+            ]
+          );
+        }
       }
       await client.query("COMMIT");
     } catch (error) {
@@ -354,7 +359,10 @@ export async function normalizeDepartmentValues(options = {}) {
     .map((person) => {
       const data = normalizedDepartmentData(person.data || {});
       const change = diffData(person.data, data);
-      return Object.keys(change).length ? { person, data, change, summary: summarize(data) } : null;
+      const summary = summarize(data);
+      return departmentRecordNeedsUpdate(person, summary, change)
+        ? { person, data, change, summary }
+        : null;
     })
     .filter(Boolean);
   const updatePersonRecord = db.prepare(`
@@ -383,13 +391,15 @@ export async function normalizeDepartmentValues(options = {}) {
         JSON.stringify(update.data),
         update.person.id
       );
-      insertAudit.run(
-        update.person.id,
-        update.summary.fullName,
-        update.summary.badgeNo,
-        changedBy,
-        JSON.stringify(update.change)
-      );
+      if (Object.keys(update.change).length) {
+        insertAudit.run(
+          update.person.id,
+          update.summary.fullName,
+          update.summary.badgeNo,
+          changedBy,
+          JSON.stringify(update.change)
+        );
+      }
     }
     db.exec("COMMIT");
   } catch (error) {
@@ -1342,6 +1352,16 @@ function normalizedDepartmentData(data) {
   });
 }
 
+function departmentRecordNeedsUpdate(person, summary, change) {
+  return (
+    Object.keys(change).length > 0 ||
+    normalizeValue(person.fullName) !== normalizeValue(summary.fullName) ||
+    normalizeValue(person.badgeNo) !== normalizeValue(summary.badgeNo) ||
+    normalizeValue(person.department) !== normalizeValue(summary.department) ||
+    normalizeValue(person.phoneNumber) !== normalizeValue(summary.phoneNumber)
+  );
+}
+
 function normalizeValue(value) {
   if (value === null || value === undefined) return "";
   return String(value).trim();
@@ -1360,16 +1380,22 @@ export function normalizeDepartmentValue(value) {
   const compact = normalized.toLowerCase().replace(/[.\s_-]+/g, "");
 
   if (["admin", "administration", "adminstration"].includes(compact)) {
-    return "Administration";
+    return "ADMINISTRATION";
   }
   if (compact === "fr" || compact === "foreignersreception") {
-    return "Foreigners Reception";
+    return "FOREIGNERS RECEPTION";
   }
   if (compact === "mnt" || compact === "maintenance") {
-    return "Maintenance";
+    return "MAINTENANCE";
   }
   if (compact === "hrt" || compact === "horticulture") {
     return "HORTICULTURE";
+  }
+  if (compact === "es" || compact === "englishsatsang") {
+    return "ENGLISH SATSANG";
+  }
+  if (compact === "baalpathi" || compact === "balpathi") {
+    return "BAAL PATHI";
   }
   if (compact === "bav") {
     return "BAV";
@@ -1381,13 +1407,13 @@ export function normalizeDepartmentValue(value) {
     return "SANITATION";
   }
   if (compact === "sevacollection" || compact === "sewacollection") {
-    return "Sewa Collection";
+    return "SEWA COLLECTION";
   }
   if (compact === "sevasamiti" || compact === "sewasamiti") {
-    return "Sewa Samiti";
+    return "SEWA SAMITI";
   }
 
-  return normalized;
+  return normalized.toUpperCase();
 }
 
 function normalizeDateValue(value) {

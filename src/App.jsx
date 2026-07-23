@@ -684,7 +684,7 @@ function VerificationSummaryTab({ token }) {
           </select>
         </label>
         <div className="summary-total">
-          <span>Total people</span>
+          <span>Total sewadars</span>
           <strong>{summary?.total ?? "-"}</strong>
         </div>
       </section>
