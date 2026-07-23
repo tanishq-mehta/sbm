@@ -70,11 +70,48 @@ def normalize_field_value(field: str, value: object) -> str:
     if field in DEPARTMENT_FIELDS:
         return department_value(value)
     if field == "Email Id":
-        normalized = re.sub(r"^\s*email\s*id\s*[:;\-]?\s*", "", normalized, flags=re.IGNORECASE)
-        match = re.search(r"[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}", normalized, flags=re.IGNORECASE)
-        if match:
-            return match.group(0)
+        return email_value(normalized)
     return normalized
+
+
+def email_value(value: object) -> str:
+    normalized = re.sub(
+        r"^\s*email\s*id\s*[:;\-]?\s*",
+        "",
+        normalize_value(value),
+        flags=re.IGNORECASE,
+    )
+    match = re.search(r"[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}", normalized, flags=re.IGNORECASE)
+    email = match.group(0) if match else normalized.strip()
+    return "" if is_generic_email(email) else email
+
+
+def is_generic_email(value: str) -> bool:
+    match = re.match(r"^([a-z0-9._%+\-]+)@([a-z0-9.\-]+\.[a-z]{2,})$", value.strip().lower())
+    if not match:
+        return False
+
+    local, domain = match.groups()
+    compact_local = re.sub(r"[^a-z0-9]", "", local)
+    generic_locals = {
+        "a",
+        "abc",
+        "abcd",
+        "abcxyz",
+        "xyz",
+        "na",
+        "noemail",
+        "noemailid",
+        "test",
+    }
+    generic_domains = {"xyz.com", "na.com"}
+    common_domains = {"gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "icloud.com"}
+
+    if domain in generic_domains:
+        return True
+    if domain == "abc.com" and compact_local in generic_locals:
+        return True
+    return domain in common_domains and compact_local in generic_locals
 
 
 def department_value(value: object) -> str:

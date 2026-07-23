@@ -1,5 +1,6 @@
 import {
   checkDatabaseConnection,
+  cleanEmailValues,
   createPerson,
   databaseProvider,
   deletePerson,
@@ -236,6 +237,17 @@ export async function handleApiRequest(req, res) {
       return;
     }
 
+    if (url.pathname === "/api/admin/clean-emails" && req.method === "POST") {
+      const body = await readJson(req);
+      const result = await cleanEmailValues({
+        batchSize: body.batchSize,
+        dryRun: Boolean(body.dryRun),
+        returnSummary: true,
+      });
+      sendJson(res, 200, result);
+      return;
+    }
+
     if (url.pathname === "/api/audits" && req.method === "GET") {
       const limit = url.searchParams.get("limit") || "500";
       sendJson(res, 200, {
@@ -377,6 +389,7 @@ function isAdminOnlyMutation(url, method) {
     (url.pathname === "/api/people" && method === "POST") ||
     (url.pathname === "/api/admin/renumber-sno" && method === "POST") ||
     (url.pathname === "/api/admin/normalize-departments" && method === "POST") ||
+    (url.pathname === "/api/admin/clean-emails" && method === "POST") ||
     (method === "DELETE" && /^\/api\/people\/\d+$/.test(url.pathname)) ||
     (method === "POST" && /^\/api\/audits\/\d+\/restore$/.test(url.pathname))
   );
@@ -391,6 +404,9 @@ function adminOnlyMessage(url, method) {
   }
   if (url.pathname === "/api/admin/normalize-departments" && method === "POST") {
     return "Only admin users can normalize departments.";
+  }
+  if (url.pathname === "/api/admin/clean-emails" && method === "POST") {
+    return "Only admin users can clean email values.";
   }
   if (method === "DELETE" && /^\/api\/people\/\d+$/.test(url.pathname)) {
     return "Only admin users can delete users.";

@@ -157,22 +157,36 @@ export async function reseedDatabase() {
   seedSqlite();
 }
 
-export async function cleanEmailValues() {
+export async function cleanEmailValues(options = {}) {
   await initializeDatabase({ seedIfEmpty: false });
+  const requestedBatchSize = Number(options.batchSize);
+  const dryRun = Boolean(options.dryRun);
 
   if (databaseProvider === "postgres") {
-    const { rows } = await getPool().query("SELECT id, data FROM people");
-    const batchSize = 200;
+    const { rows } = await getPool().query("SELECT id, full_name, badge_no, data FROM people");
     const updates = [];
     for (const row of rows) {
       const original = row.data?.[emailField] || "";
       const cleaned = sanitizeEmailValue(original);
-      if (cleaned !== original) updates.push({ id: row.id, email: cleaned });
+      if (cleaned !== original) {
+        updates.push({
+          id: row.id,
+          name: row.full_name || "",
+          badgeNo: row.badge_no || "",
+          oldEmail: original,
+          email: cleaned,
+        });
+      }
+    }
+
+    const selectedUpdates = emailCleanupBatch(updates, requestedBatchSize);
+    if (dryRun) {
+      return emailCleanupResult(updates.length, 0, options.returnSummary, updates);
     }
 
     let updated = 0;
-    for (let start = 0; start < updates.length; start += batchSize) {
-      const batch = updates.slice(start, start + batchSize);
+    for (let start = 0; start < selectedUpdates.length; start += 200) {
+      const batch = selectedUpdates.slice(start, start + 200);
       const values = [];
       const placeholders = batch.map((row, index) => {
         const offset = index * 2;
@@ -191,30 +205,47 @@ export async function cleanEmailValues() {
       );
       updated += batch.length;
     }
-    return updated;
+    return emailCleanupResult(updates.length, updated, options.returnSummary);
   }
 
   const db = getSqlite();
-  const rows = db.prepare("SELECT id, data FROM people").all();
+  const rows = db.prepare("SELECT id, full_name, badge_no, data FROM people").all();
   const update = db.prepare("UPDATE people SET data = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?");
-  let updated = 0;
+  const updates = [];
+  for (const row of rows) {
+    const data = JSON.parse(row.data);
+    const original = data[emailField] || "";
+    const cleaned = sanitizeEmailValue(original);
+    if (cleaned === original) continue;
+    updates.push({
+      id: row.id,
+      name: row.full_name || "",
+      badgeNo: row.badge_no || "",
+      oldEmail: original,
+      email: cleaned,
+      data,
+    });
+  }
+
+  const selectedUpdates = emailCleanupBatch(updates, requestedBatchSize);
+  if (dryRun) {
+    return emailCleanupResult(updates.length, 0, options.returnSummary, updates);
+  }
+
   db.exec("BEGIN");
   try {
-    for (const row of rows) {
-      const data = JSON.parse(row.data);
-      const original = data[emailField] || "";
-      const cleaned = sanitizeEmailValue(original);
-      if (cleaned === original) continue;
+    for (const row of selectedUpdates) {
+      const data = row.data;
+      const cleaned = row.email;
       data[emailField] = cleaned;
       update.run(JSON.stringify(data), row.id);
-      updated += 1;
     }
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
     throw error;
   }
-  return updated;
+  return emailCleanupResult(updates.length, selectedUpdates.length, options.returnSummary);
 }
 
 export async function normalizeVerificationValues() {
@@ -1378,6 +1409,26 @@ function departmentNormalizationResult(totalPending, updated, returnSummary = fa
   };
 }
 
+function emailCleanupBatch(updates, requestedBatchSize) {
+  if (!Number.isFinite(requestedBatchSize) || requestedBatchSize <= 0) return updates;
+  return updates.slice(0, Math.min(Math.floor(requestedBatchSize), 250));
+}
+
+function emailCleanupResult(totalPending, updated, returnSummary = false, updates = []) {
+  if (!returnSummary) return updated;
+  return {
+    updated,
+    remaining: Math.max(0, totalPending - updated),
+    preview: updates.slice(0, 25).map((entry) => ({
+      id: Number(entry.id),
+      name: entry.name || "",
+      badgeNo: entry.badgeNo || "",
+      oldEmail: entry.oldEmail || "",
+      newEmail: entry.email || "",
+    })),
+  };
+}
+
 function normalizeValue(value) {
   if (value === null || value === undefined) return "";
   return String(value).trim();
@@ -1486,7 +1537,35 @@ export function sanitizeEmailValue(value) {
     ""
   );
   const match = withoutLabel.match(/[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}/i);
-  return match ? match[0] : withoutLabel.trim();
+  const email = match ? match[0] : withoutLabel.trim();
+  return isGenericEmailValue(email) ? "" : email;
+}
+
+function isGenericEmailValue(value) {
+  const email = normalizeValue(value).toLowerCase();
+  const match = email.match(/^([a-z0-9._%+\-]+)@([a-z0-9.\-]+\.[a-z]{2,})$/);
+  if (!match) return false;
+
+  const local = match[1];
+  const domain = match[2];
+  const compactLocal = local.replace(/[^a-z0-9]/g, "");
+  const genericLocals = new Set([
+    "a",
+    "abc",
+    "abcd",
+    "abcxyz",
+    "xyz",
+    "na",
+    "noemail",
+    "noemailid",
+    "test",
+  ]);
+  const genericDomains = new Set(["xyz.com", "na.com"]);
+  const commonDomains = new Set(["gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "icloud.com"]);
+
+  if (genericDomains.has(domain)) return true;
+  if (domain === "abc.com" && genericLocals.has(compactLocal)) return true;
+  return commonDomains.has(domain) && genericLocals.has(compactLocal);
 }
 
 export function normalizeVerificationValue(value) {
