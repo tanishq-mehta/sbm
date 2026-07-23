@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 TARGET_SHEETS = {f"team{i}" for i in range(1, 7)}
 HEADER_MARKERS = {"Badge no.", "First Name", "Mobile No"}
 VERIFICATION_OPTIONS = ["None", "Verification Done", "Rectification Done"]
+STATUS_OPTIONS = ["PERMANENT", "OPEN", "ELDERLY", "NEW", "NI", "ESS", "VSS"]
 INITIATION_BY_OPTIONS = [
     "Baba Gurinder Singh Ji",
     "Maharaj Charan Singh Ji",
@@ -37,6 +38,11 @@ def verification_value(value: object) -> str:
     if comparable in {"attended-not-ok", "rectification done"}:
         return "Rectification Done"
     return normalized
+
+
+def status_value(value: object) -> str:
+    normalized = normalize_value(value).upper()
+    return normalized if normalized in STATUS_OPTIONS else normalized
 
 
 def canonical_sheet_name(name: str) -> str:
@@ -66,6 +72,8 @@ def normalize_field_value(field: str, value: object) -> str:
     normalized = normalize_value(value)
     if field == "Verification Status":
         return verification_value(value)
+    if field == "Status":
+        return status_value(value)
     if field in DATE_FIELDS:
         return date_value(value)
     if field in DEPARTMENT_FIELDS:
@@ -262,6 +270,7 @@ def dropdown_options(workbook: Path) -> dict[str, list[str]]:
         "Sewa Dept - Local Centre": departments,
         "Sewa Dept - Major Centre": departments,
         "Initiation_By": INITIATION_BY_OPTIONS,
+        "Status": STATUS_OPTIONS,
     }
 
 

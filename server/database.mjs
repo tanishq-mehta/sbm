@@ -33,8 +33,10 @@ export const databaseProvider = process.env.DATABASE_URL ? "postgres" : "sqlite"
 const emailField = "Email Id";
 const serialField = "S No";
 const badgeField = "Badge no.";
+const statusField = "Status";
 const verificationField = "Verification Status";
 const verificationOptions = ["None", "Verification Done", "Rectification Done"];
+const statusOptions = ["PERMANENT", "OPEN", "ELDERLY", "NEW", "NI", "ESS", "VSS"];
 const dateFields = new Set(["Birth Date", "Initiation Date"]);
 const departmentFields = new Set(["Sewa Dept - Local Centre", "Sewa Dept - Major Centre"]);
 const placeholderTextFields = new Set(["Profession", "Educational Qualification"]);
@@ -331,6 +333,60 @@ export async function cleanPlaceholderTextValues(options = {}) {
   }
 
   return placeholderTextCleanupResult(updates.length, selectedUpdates.length, options.returnSummary);
+}
+
+export async function importStatusValues(rows = [], options = {}) {
+  await initializeDatabase({ seedIfEmpty: false });
+  const requestedBatchSize = Number(options.batchSize);
+  const dryRun = Boolean(options.dryRun);
+  const sourceRows = normalizeStatusImportRows(rows);
+  const source = dedupeStatusImportRows(sourceRows);
+  const people = (await getAllPersonRows()).map(rowToPerson);
+  const peopleByBadge = peopleByBadgeKey(people);
+  const plan = buildStatusImportPlan(source.rows, peopleByBadge);
+  const selectedUpdates = statusImportBatch(plan.updates, requestedBatchSize);
+
+  if (dryRun) {
+    return statusImportResult(plan, 0, source, options.returnSummary);
+  }
+
+  if (databaseProvider === "postgres" && selectedUpdates.length) {
+    for (let start = 0; start < selectedUpdates.length; start += 200) {
+      const batch = selectedUpdates.slice(start, start + 200);
+      const values = [];
+      const placeholders = batch.map((entry, index) => {
+        const offset = index * 2;
+        values.push(entry.person.id, entry.newStatus);
+        return `($${offset + 1}::bigint, $${offset + 2}::text)`;
+      });
+      await getPool().query(
+        `
+          UPDATE people AS p
+          SET data = jsonb_set(p.data, '{Status}', to_jsonb(v.status), true),
+              updated_at = NOW()
+          FROM (VALUES ${placeholders.join(", ")}) AS v(id, status)
+          WHERE p.id = v.id
+        `,
+        values
+      );
+    }
+  } else if (selectedUpdates.length) {
+    const db = getSqlite();
+    const update = db.prepare("UPDATE people SET data = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?");
+    db.exec("BEGIN");
+    try {
+      for (const entry of selectedUpdates) {
+        const data = { ...(entry.person.data || {}), [statusField]: entry.newStatus };
+        update.run(JSON.stringify(data), entry.person.id);
+      }
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  return statusImportResult(plan, selectedUpdates.length, source, options.returnSummary);
 }
 
 export async function normalizeVerificationValues() {
@@ -1551,6 +1607,159 @@ function placeholderTextCleanupResult(totalPending, updated, returnSummary = fal
   };
 }
 
+function normalizeStatusImportRows(rows) {
+  if (!Array.isArray(rows)) {
+    throw statusError(400, "Status import rows must be an array.");
+  }
+
+  return rows
+    .map((row, index) => {
+      const badgeNo = normalizeValue(row?.badgeNo || row?.[badgeField]);
+      const name = normalizeValue(row?.name || row?.fullName);
+      const status = normalizeStatusValue(row?.status || row?.[statusField]);
+      return {
+        index,
+        badgeNo,
+        badgeKey: statusImportBadgeKey(badgeNo),
+        name,
+        nameKey: statusImportNameKey(name),
+        status,
+      };
+    })
+    .filter((row) => row.badgeKey && row.status);
+}
+
+function dedupeStatusImportRows(rows) {
+  const byBadge = new Map();
+  const duplicates = [];
+
+  for (const row of rows) {
+    const existing = byBadge.get(row.badgeKey);
+    if (existing) {
+      duplicates.push({ first: existing, duplicate: row });
+      continue;
+    }
+    byBadge.set(row.badgeKey, row);
+  }
+
+  return {
+    rows: [...byBadge.values()],
+    duplicateSourceRows: duplicates,
+  };
+}
+
+function peopleByBadgeKey(people) {
+  const byBadge = new Map();
+  for (const person of people) {
+    const badgeKey = statusImportBadgeKey(person.data?.[badgeField] || person.badgeNo);
+    if (!badgeKey) continue;
+    const entries = byBadge.get(badgeKey) || [];
+    entries.push(person);
+    byBadge.set(badgeKey, entries);
+  }
+  return byBadge;
+}
+
+function buildStatusImportPlan(sourceRows, peopleByBadge) {
+  const plan = {
+    updates: [],
+    alreadyCurrent: [],
+    unmatched: [],
+    duplicateDbBadges: [],
+    nameMismatches: [],
+  };
+
+  for (const row of sourceRows) {
+    const matches = peopleByBadge.get(row.badgeKey) || [];
+    if (matches.length === 0) {
+      plan.unmatched.push(row);
+      continue;
+    }
+    if (matches.length > 1) {
+      plan.duplicateDbBadges.push({ source: row, matches });
+      continue;
+    }
+
+    const person = matches[0];
+    const personNameKey = statusImportNameKey(person.fullName);
+    if (row.nameKey && personNameKey && row.nameKey !== personNameKey) {
+      plan.nameMismatches.push({
+        source: row,
+        person,
+      });
+      continue;
+    }
+
+    const oldStatus = normalizeStatusValue(person.data?.[statusField]);
+    if (oldStatus === row.status) {
+      plan.alreadyCurrent.push({ source: row, person, oldStatus, newStatus: row.status });
+      continue;
+    }
+
+    plan.updates.push({
+      source: row,
+      person,
+      oldStatus,
+      newStatus: row.status,
+    });
+  }
+
+  return plan;
+}
+
+function statusImportBatch(updates, requestedBatchSize) {
+  if (!Number.isFinite(requestedBatchSize) || requestedBatchSize <= 0) return updates;
+  return updates.slice(0, Math.min(Math.floor(requestedBatchSize), 250));
+}
+
+function statusImportResult(plan, updated, source, returnSummary = false) {
+  if (!returnSummary) return updated;
+  return {
+    updated,
+    remaining: Math.max(0, plan.updates.length - updated),
+    alreadyCurrent: plan.alreadyCurrent.length,
+    unmatched: plan.unmatched.length,
+    nameMismatches: plan.nameMismatches.length,
+    duplicateSourceRows: source.duplicateSourceRows.length,
+    duplicateDbBadges: plan.duplicateDbBadges.length,
+    preview: plan.updates.slice(0, 25).map(statusImportUpdatePreview),
+    unmatchedPreview: plan.unmatched.slice(0, 25).map(statusImportSourcePreview),
+    nameMismatchPreview: plan.nameMismatches.slice(0, 25).map((entry) => ({
+      id: entry.person.id,
+      badgeNo: entry.source.badgeNo,
+      sourceName: entry.source.name,
+      dbName: entry.person.fullName || "",
+      status: entry.source.status,
+    })),
+  };
+}
+
+function statusImportUpdatePreview(entry) {
+  return {
+    id: entry.person.id,
+    badgeNo: entry.source.badgeNo,
+    name: entry.person.fullName || "",
+    oldStatus: entry.oldStatus || "",
+    newStatus: entry.newStatus,
+  };
+}
+
+function statusImportSourcePreview(entry) {
+  return {
+    badgeNo: entry.badgeNo,
+    name: entry.name,
+    status: entry.status,
+  };
+}
+
+function statusImportBadgeKey(value) {
+  return normalizeValue(value).toUpperCase();
+}
+
+function statusImportNameKey(value) {
+  return normalizeValue(value).toUpperCase().replace(/[^A-Z0-9]+/g, "");
+}
+
 function normalizeValue(value) {
   if (value === null || value === undefined) return "";
   return String(value).trim();
@@ -1559,6 +1768,7 @@ function normalizeValue(value) {
 function normalizeFieldValue(field, value) {
   const normalized = normalizeValue(value);
   if (field === verificationField) return normalizeVerificationValue(normalized);
+  if (field === statusField) return normalizeStatusValue(normalized);
   if (dateFields.has(field)) return normalizeDateValue(normalized);
   if (departmentFields.has(field)) return normalizeDepartmentValue(normalized);
   if (placeholderTextFields.has(field)) return sanitizePlaceholderTextValue(normalized);
@@ -1700,6 +1910,11 @@ function isPlaceholderTextValue(value) {
   const compact = normalizeValue(value).toLowerCase().replace(/[^a-z0-9]+/g, "");
   if (!compact) return false;
   return placeholderTextValues.has(compact);
+}
+
+function normalizeStatusValue(value) {
+  const normalized = normalizeValue(value).toUpperCase();
+  return statusOptions.includes(normalized) ? normalized : normalized;
 }
 
 export function normalizeVerificationValue(value) {

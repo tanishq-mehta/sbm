@@ -320,5 +320,14 @@
     "TRAFFIC",
     "WATER",
     "ZONAL OFFICE"
+  ],
+  "Status": [
+    "PERMANENT",
+    "OPEN",
+    "ELDERLY",
+    "NEW",
+    "NI",
+    "ESS",
+    "VSS"
   ]
 }

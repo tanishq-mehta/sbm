@@ -65,6 +65,7 @@ const sections = [
   {
     title: "Verification",
     fields: [
+      "Status",
       "Verification Status",
     ],
   },

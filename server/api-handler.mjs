@@ -11,6 +11,7 @@ import {
   getPerson,
   getLocationOptions,
   getVerificationSummary,
+  importStatusValues,
   initializeDatabase,
   listAuditLogs,
   listAllAuditLogs,
@@ -260,6 +261,17 @@ export async function handleApiRequest(req, res) {
       return;
     }
 
+    if (url.pathname === "/api/admin/import-statuses" && req.method === "POST") {
+      const body = await readJson(req);
+      const result = await importStatusValues(body.rows || [], {
+        batchSize: body.batchSize,
+        dryRun: Boolean(body.dryRun),
+        returnSummary: true,
+      });
+      sendJson(res, 200, result);
+      return;
+    }
+
     if (url.pathname === "/api/audits" && req.method === "GET") {
       const limit = url.searchParams.get("limit") || "500";
       sendJson(res, 200, {
@@ -403,6 +415,7 @@ function isAdminOnlyMutation(url, method) {
     (url.pathname === "/api/admin/normalize-departments" && method === "POST") ||
     (url.pathname === "/api/admin/clean-emails" && method === "POST") ||
     (url.pathname === "/api/admin/clean-placeholder-text" && method === "POST") ||
+    (url.pathname === "/api/admin/import-statuses" && method === "POST") ||
     (method === "DELETE" && /^\/api\/people\/\d+$/.test(url.pathname)) ||
     (method === "POST" && /^\/api\/audits\/\d+\/restore$/.test(url.pathname))
   );
@@ -423,6 +436,9 @@ function adminOnlyMessage(url, method) {
   }
   if (url.pathname === "/api/admin/clean-placeholder-text" && method === "POST") {
     return "Only admin users can clean placeholder field values.";
+  }
+  if (url.pathname === "/api/admin/import-statuses" && method === "POST") {
+    return "Only admin users can import status values.";
   }
   if (method === "DELETE" && /^\/api\/people\/\d+$/.test(url.pathname)) {
     return "Only admin users can delete users.";
