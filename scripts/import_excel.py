@@ -23,6 +23,7 @@ INITIATION_BY_OPTIONS = [
 ]
 DATE_FIELDS = {"Birth Date", "Initiation Date"}
 DEPARTMENT_FIELDS = {"Sewa Dept - Local Centre", "Sewa Dept - Major Centre"}
+PLACEHOLDER_TEXT_FIELDS = {"Profession", "Educational Qualification"}
 MONTH_NAMES = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
 
 
@@ -71,7 +72,33 @@ def normalize_field_value(field: str, value: object) -> str:
         return department_value(value)
     if field == "Email Id":
         return email_value(normalized)
+    if field in PLACEHOLDER_TEXT_FIELDS:
+        return placeholder_text_value(normalized)
     return normalized
+
+
+def placeholder_text_value(value: object) -> str:
+    normalized = normalize_value(value)
+    compact = re.sub(r"[^a-z0-9]+", "", normalized.lower())
+    placeholder_values = {
+        "na",
+        "nill",
+        "nil",
+        "none",
+        "no",
+        "notapplicable",
+        "notappicable",
+        "notaplicable",
+        "notavailable",
+        "notavaliable",
+        "notavail",
+        "notgiven",
+        "notknown",
+        "notmentioned",
+        "notprovided",
+        "unknown",
+    }
+    return "" if compact in placeholder_values else normalized
 
 
 def email_value(value: object) -> str:

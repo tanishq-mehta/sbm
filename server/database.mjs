@@ -37,6 +37,25 @@ const verificationField = "Verification Status";
 const verificationOptions = ["None", "Verification Done", "Rectification Done"];
 const dateFields = new Set(["Birth Date", "Initiation Date"]);
 const departmentFields = new Set(["Sewa Dept - Local Centre", "Sewa Dept - Major Centre"]);
+const placeholderTextFields = new Set(["Profession", "Educational Qualification"]);
+const placeholderTextValues = new Set([
+  "na",
+  "nill",
+  "nil",
+  "none",
+  "no",
+  "notapplicable",
+  "notappicable",
+  "notaplicable",
+  "notavailable",
+  "notavaliable",
+  "notavail",
+  "notgiven",
+  "notknown",
+  "notmentioned",
+  "notprovided",
+  "unknown",
+]);
 const monthNames = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
 const dataQualityGroups = [
   {
@@ -246,6 +265,67 @@ export async function cleanEmailValues(options = {}) {
     throw error;
   }
   return emailCleanupResult(updates.length, selectedUpdates.length, options.returnSummary);
+}
+
+export async function cleanPlaceholderTextValues(options = {}) {
+  await initializeDatabase({ seedIfEmpty: false });
+  const requestedBatchSize = Number(options.batchSize);
+  const dryRun = Boolean(options.dryRun);
+
+  if (databaseProvider === "postgres") {
+    const { rows } = await getPool().query("SELECT id, full_name, badge_no, data FROM people");
+    const updates = placeholderTextUpdates(rows.map(rowToPerson));
+    const selectedUpdates = placeholderTextCleanupBatch(updates, requestedBatchSize);
+
+    if (dryRun) {
+      return placeholderTextCleanupResult(updates.length, 0, options.returnSummary, updates);
+    }
+
+    for (let start = 0; start < selectedUpdates.length; start += 200) {
+      const batch = selectedUpdates.slice(start, start + 200);
+      const values = [];
+      const placeholders = batch.map((row, index) => {
+        const offset = index * 2;
+        values.push(row.person.id, row.data);
+        return `($${offset + 1}::bigint, $${offset + 2}::jsonb)`;
+      });
+      await getPool().query(
+        `
+          UPDATE people AS p
+          SET data = v.data,
+              updated_at = NOW()
+          FROM (VALUES ${placeholders.join(", ")}) AS v(id, data)
+          WHERE p.id = v.id
+        `,
+        values
+      );
+    }
+
+    return placeholderTextCleanupResult(updates.length, selectedUpdates.length, options.returnSummary);
+  }
+
+  const db = getSqlite();
+  const rows = db.prepare("SELECT id, full_name, badge_no, data FROM people").all();
+  const updates = placeholderTextUpdates(rows.map(rowToPerson));
+  const selectedUpdates = placeholderTextCleanupBatch(updates, requestedBatchSize);
+
+  if (dryRun) {
+    return placeholderTextCleanupResult(updates.length, 0, options.returnSummary, updates);
+  }
+
+  const update = db.prepare("UPDATE people SET data = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?");
+  db.exec("BEGIN");
+  try {
+    for (const row of selectedUpdates) {
+      update.run(JSON.stringify(row.data), row.person.id);
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+
+  return placeholderTextCleanupResult(updates.length, selectedUpdates.length, options.returnSummary);
 }
 
 export async function normalizeVerificationValues() {
@@ -1429,6 +1509,43 @@ function emailCleanupResult(totalPending, updated, returnSummary = false, update
   };
 }
 
+function placeholderTextUpdates(people) {
+  return people
+    .map((person) => {
+      const data = { ...(person.data || {}) };
+      const changes = [];
+      for (const field of placeholderTextFields) {
+        const oldValue = normalizeValue(data[field]);
+        const newValue = sanitizePlaceholderTextValue(oldValue);
+        if (oldValue !== newValue) {
+          data[field] = newValue;
+          changes.push({ field, oldValue, newValue });
+        }
+      }
+      return changes.length ? { person, data, changes } : null;
+    })
+    .filter(Boolean);
+}
+
+function placeholderTextCleanupBatch(updates, requestedBatchSize) {
+  if (!Number.isFinite(requestedBatchSize) || requestedBatchSize <= 0) return updates;
+  return updates.slice(0, Math.min(Math.floor(requestedBatchSize), 250));
+}
+
+function placeholderTextCleanupResult(totalPending, updated, returnSummary = false, updates = []) {
+  if (!returnSummary) return updated;
+  return {
+    updated,
+    remaining: Math.max(0, totalPending - updated),
+    preview: updates.slice(0, 25).map((entry) => ({
+      id: Number(entry.person.id),
+      name: entry.person.fullName || "",
+      badgeNo: entry.person.badgeNo || "",
+      changes: entry.changes,
+    })),
+  };
+}
+
 function normalizeValue(value) {
   if (value === null || value === undefined) return "";
   return String(value).trim();
@@ -1439,6 +1556,7 @@ function normalizeFieldValue(field, value) {
   if (field === verificationField) return normalizeVerificationValue(normalized);
   if (dateFields.has(field)) return normalizeDateValue(normalized);
   if (departmentFields.has(field)) return normalizeDepartmentValue(normalized);
+  if (placeholderTextFields.has(field)) return sanitizePlaceholderTextValue(normalized);
   return field === emailField ? sanitizeEmailValue(normalized) : normalized;
 }
 
@@ -1566,6 +1684,17 @@ function isGenericEmailValue(value) {
   if (genericDomains.has(domain)) return true;
   if (domain === "abc.com" && genericLocals.has(compactLocal)) return true;
   return commonDomains.has(domain) && genericLocals.has(compactLocal);
+}
+
+function sanitizePlaceholderTextValue(value) {
+  const normalized = normalizeValue(value);
+  return isPlaceholderTextValue(normalized) ? "" : normalized;
+}
+
+function isPlaceholderTextValue(value) {
+  const compact = normalizeValue(value).toLowerCase().replace(/[^a-z0-9]+/g, "");
+  if (!compact) return false;
+  return placeholderTextValues.has(compact);
 }
 
 export function normalizeVerificationValue(value) {
