@@ -884,8 +884,9 @@ export async function getVerificationSummary({ department = "" } = {}) {
   };
 }
 
-export async function getDataQualitySummary() {
+export async function getDataQualitySummary(options = {}) {
   await initializeDatabase();
+  const onlyNonElderly = Boolean(options.onlyNonElderly);
   const people = (await getAllPersonRows()).map(rowToPerson).filter(isPrBadgePerson);
   const fieldsSummary = dataQualityFields.map(emptyDataQualityFieldSummary);
   const fieldsByKey = new Map(fieldsSummary.map((field) => [field.key, field]));
@@ -896,6 +897,10 @@ export async function getDataQualitySummary() {
     if (!group) continue;
 
     for (const definition of dataQualityFields) {
+      if (onlyNonElderly && definition.key === "majorCentre" && isElderlyStatusPerson(person)) {
+        continue;
+      }
+
       const details = dataQualityDetailsForField(person, definition, optionSets.get(definition.key) || new Set());
       if (!details.issueType) continue;
 
@@ -907,17 +912,21 @@ export async function getDataQualitySummary() {
 
   return {
     totalPeople: people.length,
+    filters: {
+      majorCentreOnlyNonElderly: onlyNonElderly,
+    },
     groups: dataQualityGroups.map(({ key, label }) => ({ key, label })),
     issueTypes: dataQualityIssueTypes,
     fields: fieldsSummary,
   };
 }
 
-export async function listDataQualityPeople({ field, issue, group } = {}) {
+export async function listDataQualityPeople({ field, issue, group, onlyNonElderly = false } = {}) {
   await initializeDatabase();
   const fieldDefinition = dataQualityFields.find((definition) => definition.key === field);
   const issueType = dataQualityIssueTypes.find((definition) => definition.key === issue);
   const groupDefinition = dataQualityGroups.find((definition) => definition.key === group);
+  const applyNonElderlyFilter = Boolean(onlyNonElderly) && fieldDefinition?.key === "majorCentre";
 
   if (!fieldDefinition) throw statusError(400, "Unknown data quality field.");
   if (!issueType) throw statusError(400, "Unknown data quality issue.");
@@ -928,6 +937,8 @@ export async function listDataQualityPeople({ field, issue, group } = {}) {
   const results = [];
 
   for (const person of people) {
+    if (applyNonElderlyFilter && isElderlyStatusPerson(person)) continue;
+
     const personGroup = dataQualityGroupForPerson(person);
     if (personGroup?.key !== groupDefinition.key) continue;
 
@@ -947,6 +958,9 @@ export async function listDataQualityPeople({ field, issue, group } = {}) {
     field: { key: fieldDefinition.key, label: fieldDefinition.label },
     issue: issueType,
     group: { key: groupDefinition.key, label: groupDefinition.label },
+    filters: {
+      onlyNonElderly: applyNonElderlyFilter,
+    },
     total: results.length,
     results,
   };
@@ -2556,6 +2570,10 @@ function dataQualityGroupForPerson(person) {
 
 function isPrBadgePerson(person) {
   return normalizeValue(person.data?.[badgeField] || person.badgeNo).toUpperCase().startsWith("PR");
+}
+
+function isElderlyStatusPerson(person) {
+  return normalizeStatusValue(person.data?.[statusField]) === "ELDERLY";
 }
 
 function dataQualityGroupForStatus(status) {

@@ -144,7 +144,11 @@ export default function App() {
       ) : route.name === "data-quality-list" ? (
         <DataQualityListPage token={token} route={route} />
       ) : route.name === "summary" ? (
-        <SummaryPage token={token} initialTab={route.tab} />
+        <SummaryPage
+          token={token}
+          initialTab={route.tab}
+          initialMajorCentreOnlyNonElderly={route.onlyNonElderly}
+        />
       ) : route.name === "new-person" ? (
         canManageUsers ? (
           <PersonPage token={token} isNew canManageUsers returnTo={route.returnTo} />
@@ -596,7 +600,7 @@ function AuditPage({ token, canManageUsers }) {
   );
 }
 
-function SummaryPage({ token, initialTab = "verification" }) {
+function SummaryPage({ token, initialTab = "verification", initialMajorCentreOnlyNonElderly = false }) {
   const [activeTab, setActiveTab] = useState(initialTab === "dataQuality" ? "dataQuality" : "verification");
 
   return (
@@ -635,7 +639,10 @@ function SummaryPage({ token, initialTab = "verification" }) {
       {activeTab === "verification" ? (
         <VerificationSummaryTab token={token} />
       ) : (
-        <DataQualitySummaryTab token={token} />
+        <DataQualitySummaryTab
+          token={token}
+          initialMajorCentreOnlyNonElderly={initialMajorCentreOnlyNonElderly}
+        />
       )}
     </main>
   );
@@ -762,16 +769,23 @@ function VerificationSummaryTab({ token }) {
   );
 }
 
-function DataQualitySummaryTab({ token }) {
+function DataQualitySummaryTab({ token, initialMajorCentreOnlyNonElderly = false }) {
   const [summary, setSummary] = useState(null);
+  const [majorCentreOnlyNonElderly, setMajorCentreOnlyNonElderly] = useState(Boolean(initialMajorCentreOnlyNonElderly));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    setMajorCentreOnlyNonElderly(Boolean(initialMajorCentreOnlyNonElderly));
+  }, [initialMajorCentreOnlyNonElderly]);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError("");
-    apiFetch("/api/summary/data-quality", { token })
+    const params = new URLSearchParams();
+    if (majorCentreOnlyNonElderly) params.set("onlyNonElderly", "1");
+    apiFetch(`/api/summary/data-quality?${params.toString()}`, { token })
       .then((payload) => {
         if (!cancelled) setSummary(payload);
       })
@@ -784,9 +798,16 @@ function DataQualitySummaryTab({ token }) {
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, [majorCentreOnlyNonElderly, token]);
 
   const fields = summary?.fields || [];
+
+  function updateMajorCentreFilter(checked) {
+    setMajorCentreOnlyNonElderly(checked);
+    const params = new URLSearchParams({ tab: "dataQuality" });
+    if (checked) params.set("onlyNonElderly", "1");
+    window.history.replaceState(null, "", `#/summary?${params.toString()}`);
+  }
 
   return (
     <>
@@ -798,8 +819,20 @@ function DataQualitySummaryTab({ token }) {
           {fields.map((field) => (
             <article className="quality-card" key={field.key}>
               <header>
-                <h2>{field.label}</h2>
-                <span>{dataQualityFieldTotal(field)} issues</span>
+                <div>
+                  <h2>{field.label}</h2>
+                  <span>{dataQualityFieldTotal(field)} issues</span>
+                </div>
+                {field.key === "majorCentre" ? (
+                  <label className="quality-toggle">
+                    <input
+                      type="checkbox"
+                      checked={majorCentreOnlyNonElderly}
+                      onChange={(event) => updateMajorCentreFilter(event.target.checked)}
+                    />
+                    <span>Only non-elderly</span>
+                  </label>
+                ) : null}
               </header>
               {(summary.groups || []).map((group) => (
                 <div className="quality-card-group" key={group.key}>
@@ -809,7 +842,12 @@ function DataQualitySummaryTab({ token }) {
                       <button
                         type="button"
                         key={issue}
-                        onClick={() => openDataQualityList(field.key, issue, group.key)}
+                        onClick={() => openDataQualityList(
+                          field.key,
+                          issue,
+                          group.key,
+                          field.key === "majorCentre" && majorCentreOnlyNonElderly
+                        )}
                         disabled={!field.groups?.[group.key]?.[issue]}
                       >
                         <span>{issue === "mismatch" ? "Mismatching" : "Blank"}</span>
@@ -841,6 +879,7 @@ function DataQualityListPage({ token, route }) {
       issue: route.issue || "",
       group: route.group || "",
     });
+    if (route.onlyNonElderly) params.set("onlyNonElderly", "1");
     apiFetch(`/api/summary/data-quality/people?${params.toString()}`, { token })
       .then((nextPayload) => {
         if (!cancelled) setPayload(nextPayload);
@@ -854,12 +893,18 @@ function DataQualityListPage({ token, route }) {
     return () => {
       cancelled = true;
     };
-  }, [route.field, route.group, route.issue, token]);
+  }, [route.field, route.group, route.issue, route.onlyNonElderly, token]);
 
   const title = payload
     ? `${payload.issue.label} ${payload.field.label}`
     : "Dropdown issue list";
   const currentHash = window.location.hash || "#/summary/data-quality";
+  const backParams = new URLSearchParams({ tab: "dataQuality" });
+  if (route.onlyNonElderly && route.field === "majorCentre") backParams.set("onlyNonElderly", "1");
+  const backHash = `#/summary?${backParams.toString()}`;
+  const subtitle = payload
+    ? [payload.group.label, payload.filters?.onlyNonElderly ? "Only non-elderly" : ""].filter(Boolean).join(" - ")
+    : "";
 
   return (
     <main className="page">
@@ -867,9 +912,9 @@ function DataQualityListPage({ token, route }) {
         <div>
           <p className="eyebrow">Dropdown quality drilldown</p>
           <h1>{title}</h1>
-          {payload ? <p className="page-subtitle">{payload.group.label}</p> : null}
+          {subtitle ? <p className="page-subtitle">{subtitle}</p> : null}
         </div>
-        <button className="secondary-button" onClick={() => (window.location.hash = "#/summary?tab=dataQuality")}>
+        <button className="secondary-button" onClick={() => (window.location.hash = backHash)}>
           Back to summary
         </button>
       </section>
@@ -1255,9 +1300,16 @@ function readRoute() {
       field: params.get("field") || "",
       issue: params.get("issue") || "",
       group: params.get("group") || "",
+      onlyNonElderly: isTruthyParam(params.get("onlyNonElderly")),
     };
   }
-  if (path === "#/summary") return { name: "summary", tab: params.get("tab") || "" };
+  if (path === "#/summary") {
+    return {
+      name: "summary",
+      tab: params.get("tab") || "",
+      onlyNonElderly: isTruthyParam(params.get("onlyNonElderly")),
+    };
+  }
   return { name: "home" };
 }
 
@@ -1266,8 +1318,13 @@ function safeReturnTo(value) {
   return decoded.startsWith("#/") ? decoded : "";
 }
 
-function openDataQualityList(field, issue, group) {
+function isTruthyParam(value) {
+  return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());
+}
+
+function openDataQualityList(field, issue, group, onlyNonElderly = false) {
   const params = new URLSearchParams({ field, issue, group });
+  if (onlyNonElderly) params.set("onlyNonElderly", "1");
   window.location.hash = `#/summary/data-quality?${params.toString()}`;
 }
 

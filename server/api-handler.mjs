@@ -206,7 +206,9 @@ export async function handleApiRequest(req, res) {
     }
 
     if (url.pathname === "/api/summary/data-quality" && req.method === "GET") {
-      sendJson(res, 200, await getDataQualitySummary());
+      sendJson(res, 200, await getDataQualitySummary({
+        onlyNonElderly: isTruthyQueryValue(url.searchParams.get("onlyNonElderly")),
+      }));
       return;
     }
 
@@ -215,6 +217,7 @@ export async function handleApiRequest(req, res) {
         field: url.searchParams.get("field") || "",
         issue: url.searchParams.get("issue") || "",
         group: url.searchParams.get("group") || "",
+        onlyNonElderly: isTruthyQueryValue(url.searchParams.get("onlyNonElderly")),
       }));
       return;
     }
@@ -420,6 +423,10 @@ function requireAdmin(res, user, message) {
   if (user?.isAdmin) return true;
   sendJson(res, 403, { message });
   return false;
+}
+
+function isTruthyQueryValue(value) {
+  return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());
 }
 
 function isAdminOnlyMutation(url, method) {

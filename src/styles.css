@@ -568,9 +568,15 @@ tbody tr:focus {
 .quality-card header {
   display: flex;
   justify-content: space-between;
+  align-items: flex-start;
   gap: 12px;
   border-bottom: 1px solid #edf1ef;
   padding: 14px 16px;
+}
+
+.quality-card header > div {
+  display: grid;
+  gap: 4px;
 }
 
 .quality-card header span {
@@ -578,6 +584,28 @@ tbody tr:focus {
   font-size: 0.88rem;
   font-weight: 800;
   white-space: nowrap;
+}
+
+.quality-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: max-content;
+  color: #253a38;
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.quality-toggle input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: #23755e;
+}
+
+.quality-toggle span {
+  color: #253a38;
+  font-size: 0.82rem;
 }
 
 .quality-card-group {
@@ -853,6 +881,14 @@ tbody tr:focus {
   .summary-total {
     justify-content: start;
     text-align: left;
+  }
+
+  .quality-card header {
+    display: grid;
+  }
+
+  .quality-toggle {
+    min-width: 0;
   }
 
   .bar-row {
