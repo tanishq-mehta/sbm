@@ -4,6 +4,7 @@ const TOKEN_KEY = "sbm-user-manager-token";
 const LEGACY_USER_KEY = "sbm-user-manager-user";
 const dateFields = ["Birth Date", "Initiation Date"];
 const addressLimitFields = ["Address Line 1", "Address Line 2"];
+const PERSON_IMAGE_MAX_BYTES = 3 * 1024 * 1024;
 
 const sections = [
   {
@@ -980,6 +981,14 @@ function PersonPage({ id, token, isNew = false, canManageUsers = false, returnTo
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [imageInfo, setImageInfo] = useState(null);
+  const [imagePreviewUrl, setImagePreviewUrl] = useState("");
+  const [imageLoading, setImageLoading] = useState(false);
+  const [imageUploading, setImageUploading] = useState(false);
+  const [imageFile, setImageFile] = useState(null);
+  const [imageInputKey, setImageInputKey] = useState(0);
+  const [imageRefreshKey, setImageRefreshKey] = useState(0);
+  const [imageError, setImageError] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
@@ -1018,6 +1027,49 @@ function PersonPage({ id, token, isNew = false, canManageUsers = false, returnTo
   }, [id, isNew, token]);
 
   useEffect(() => {
+    if (isNew || !id) {
+      setImageInfo(null);
+      setImagePreviewUrl("");
+      setImageError("");
+      setImageFile(null);
+      return undefined;
+    }
+
+    let cancelled = false;
+    let objectUrl = "";
+    setImageLoading(true);
+    setImageError("");
+    setImageInfo(null);
+    setImagePreviewUrl("");
+
+    apiFetch(`/api/people/${id}/image-info`, { token })
+      .then(async (info) => {
+        if (cancelled) return;
+        setImageInfo(info);
+        if (!info.available || !info.url) return;
+
+        const cacheParam = encodeURIComponent(info.updatedAt || info.fileName || String(imageRefreshKey));
+        const separator = info.url.includes("?") ? "&" : "?";
+        const blob = await apiFetchBlob(`${info.url}${separator}v=${cacheParam}`, { token });
+        if (cancelled) return;
+
+        objectUrl = URL.createObjectURL(blob);
+        setImagePreviewUrl(objectUrl);
+      })
+      .catch((err) => {
+        if (!cancelled) setImageError(err.message);
+      })
+      .finally(() => {
+        if (!cancelled) setImageLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [id, imageRefreshKey, isNew, token]);
+
+  useEffect(() => {
     let cancelled = false;
     const params = new URLSearchParams();
     if (formData.State) params.set("state", formData.State);
@@ -1038,6 +1090,8 @@ function PersonPage({ id, token, isNew = false, canManageUsers = false, returnTo
 
   const groupedSections = useMemo(() => buildSections(fields), [fields]);
   const backTarget = returnTo || "#/home";
+  const imageStorageReady = imageInfo?.configured === true;
+  const imageMaxBytes = Number(imageInfo?.maxBytes || PERSON_IMAGE_MAX_BYTES);
 
   function updateField(field, value) {
     setFormData((current) => ({ ...current, [field]: value }));
@@ -1094,6 +1148,44 @@ function PersonPage({ id, token, isNew = false, canManageUsers = false, returnTo
     }
   }
 
+  async function uploadImage() {
+    setNotice("");
+    setImageError("");
+
+    if (!imageFile) {
+      setImageError("Choose a photo before uploading.");
+      return;
+    }
+
+    const maxBytes = Number(imageInfo?.maxBytes || PERSON_IMAGE_MAX_BYTES);
+    if (imageFile.size > maxBytes) {
+      setImageError(`Photo must be ${formatFileSize(maxBytes)} or smaller.`);
+      return;
+    }
+
+    setImageUploading(true);
+    try {
+      const dataBase64 = await fileToBase64(imageFile);
+      await apiFetch(`/api/people/${id}/image`, {
+        method: "POST",
+        token,
+        body: JSON.stringify({
+          fileName: imageFile.name,
+          contentType: imageFile.type,
+          dataBase64,
+        }),
+      });
+      setImageFile(null);
+      setImageInputKey((current) => current + 1);
+      setImageRefreshKey((current) => current + 1);
+      setNotice("Photo uploaded.");
+    } catch (err) {
+      setImageError(err.message);
+    } finally {
+      setImageUploading(false);
+    }
+  }
+
   if (loading) {
     return (
       <main className="page">
@@ -1142,6 +1234,55 @@ function PersonPage({ id, token, isNew = false, canManageUsers = false, returnTo
           </button>
         ) : null}
       </section>
+
+      {!isNew ? (
+        <section className="record-photo-panel">
+          <div className="photo-frame">
+            {imageLoading ? (
+              <span className="photo-placeholder">Loading photo...</span>
+            ) : imagePreviewUrl ? (
+              <img src={imagePreviewUrl} alt={`${displayFullName(formData) || "User"} photo`} />
+            ) : (
+              <span className="photo-placeholder">
+                {imageStorageReady ? "No photo uploaded" : "Image storage not configured"}
+              </span>
+            )}
+          </div>
+          <div className="photo-details">
+            <div>
+              <p className="eyebrow">Profile photo</p>
+              <h2>{imageInfo?.fileName || "Photo"}</h2>
+              <p className="photo-meta">
+                {imageInfo?.available
+                  ? `${imageInfo.contentType || "image"} · ${formatFileSize(imageInfo.sizeBytes || 0)}`
+                  : `JPG, PNG, or WebP up to ${formatFileSize(imageMaxBytes)}`}
+              </p>
+            </div>
+            <div className="photo-actions">
+              <label className="file-picker">
+                <span>Choose photo</span>
+                <input
+                  key={imageInputKey}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  disabled={!imageStorageReady || imageUploading}
+                  onChange={(event) => setImageFile(event.target.files?.[0] || null)}
+                />
+              </label>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={uploadImage}
+                disabled={!imageStorageReady || !imageFile || imageUploading}
+              >
+                {imageUploading ? "Uploading..." : "Upload photo"}
+              </button>
+            </div>
+            {imageFile ? <p className="photo-meta">Selected: {imageFile.name}</p> : null}
+            {imageError ? <p className="form-error">{imageError}</p> : null}
+          </div>
+        </section>
+      ) : null}
 
       <form onSubmit={save} className="record-form">
         {groupedSections.map((section) => (
@@ -1265,6 +1406,22 @@ async function apiFetch(path, { token, method = "GET", body } = {}) {
   return payload;
 }
 
+async function apiFetchBlob(path, { token } = {}) {
+  const headers = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const response = await fetch(path, { headers });
+  if (!response.ok) {
+    const contentType = response.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) {
+      const payload = await response.json();
+      throw new Error(payload.message || "Request failed.");
+    }
+    throw new Error("Request failed.");
+  }
+  return response.blob();
+}
+
 async function downloadWorkbook(path, token, fallbackFilename) {
   const response = await fetch(path, {
     headers: { Authorization: `Bearer ${token}` },
@@ -1282,6 +1439,28 @@ async function downloadWorkbook(path, token, fallbackFilename) {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || "");
+      resolve(result.includes(",") ? result.split(",", 2)[1] : result);
+    };
+    reader.onerror = () => reject(reader.error || new Error("Could not read photo."));
+    reader.readAsDataURL(file);
+  });
+}
+
+function formatFileSize(value) {
+  const bytes = Number(value || 0);
+  if (bytes >= 1024 * 1024) {
+    const megabytes = bytes / (1024 * 1024);
+    return `${megabytes.toFixed(Number.isInteger(megabytes) ? 0 : 1)} MB`;
+  }
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} bytes`;
 }
 
 function readRoute() {

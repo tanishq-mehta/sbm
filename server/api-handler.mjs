@@ -9,6 +9,7 @@ import {
   fields,
   getDataQualitySummary,
   getPerson,
+  getPersonImageMetadata,
   getLocationOptions,
   getVerificationSummary,
   importStatusValues,
@@ -22,6 +23,7 @@ import {
   normalizeDepartmentValues,
   renumberSerialNumbers,
   restorePersonFromAudit,
+  savePersonImageMetadata,
   sbmExportFields,
   searchableFields,
   updatePerson,
@@ -33,6 +35,18 @@ import {
   createSessionToken,
   verifySessionToken,
 } from "./auth.mjs";
+import {
+  detectImageContentType,
+  getImageObject,
+  headImageObject,
+  imageCandidateKeys,
+  imageFileNameFromKey,
+  imageStorageStatus,
+  imageUploadRequestMaxBytes,
+  objectKeyForBadgeImage,
+  personImageMaxBytes,
+  putImageObject,
+} from "./r2-storage.mjs";
 
 let initializationPromise;
 
@@ -327,6 +341,75 @@ export async function handleApiRequest(req, res) {
       return;
     }
 
+    const personImageInfoMatch = url.pathname.match(/^\/api\/people\/(\d+)\/image-info$/);
+    if (personImageInfoMatch && req.method === "GET") {
+      const person = await getPerson(personImageInfoMatch[1]);
+      if (!person) {
+        sendJson(res, 404, { message: "Person not found." });
+        return;
+      }
+
+      sendJson(res, 200, await personImageInfo(person));
+      return;
+    }
+
+    const personImageMatch = url.pathname.match(/^\/api\/people\/(\d+)\/image$/);
+    if (personImageMatch && req.method === "GET") {
+      const person = await getPerson(personImageMatch[1]);
+      if (!person) {
+        sendJson(res, 404, { message: "Person not found." });
+        return;
+      }
+
+      const located = await locatePersonImage(person);
+      if (!located) {
+        sendJson(res, 404, { message: "Photo not found." });
+        return;
+      }
+
+      const image = await getImageObject(located.key);
+      if (!image) {
+        sendJson(res, 404, { message: "Photo not found." });
+        return;
+      }
+
+      res.writeHead(200, personImageHeaders(image));
+      res.end(image.body);
+      return;
+    }
+
+    if (personImageMatch && req.method === "POST") {
+      const person = await getPerson(personImageMatch[1]);
+      if (!person) {
+        sendJson(res, 404, { message: "Person not found." });
+        return;
+      }
+
+      const body = await readJson(req, { maxBytes: imageUploadRequestMaxBytes() });
+      const upload = parseImageUpload(body);
+      const objectKey = objectKeyForBadgeImage(person.data?.["Badge no."] || person.badgeNo, upload);
+      const stored = await putImageObject(objectKey, upload.buffer, upload.contentType);
+      const metadata = await savePersonImageMetadata(
+        person,
+        {
+          badgeNo: person.data?.["Badge no."] || person.badgeNo || "",
+          objectKey: stored.key,
+          contentType: stored.contentType,
+          sizeBytes: stored.sizeBytes,
+          etag: stored.etag,
+        },
+        { changedBy: authenticatedUser.username }
+      );
+
+      sendJson(res, 200, imageInfoPayload(person, {
+        configured: true,
+        available: true,
+        metadata,
+        object: stored,
+      }));
+      return;
+    }
+
     const personMatch = url.pathname.match(/^\/api\/people\/(\d+)$/);
     if (personMatch && req.method === "GET") {
       const person = await getPerson(personMatch[1]);
@@ -390,6 +473,90 @@ function ensureDatabaseInitialized() {
   return initializationPromise;
 }
 
+async function personImageInfo(person) {
+  const storageStatus = imageStorageStatus();
+  if (!storageStatus.configured) {
+    return imageInfoPayload(person, {
+      configured: false,
+      available: false,
+      missingConfig: storageStatus.missing,
+    });
+  }
+
+  const metadata = await getPersonImageMetadata(person.id);
+  const object = await locatePersonImage(person, metadata);
+  return imageInfoPayload(person, {
+    configured: true,
+    available: Boolean(object),
+    metadata,
+    object,
+  });
+}
+
+async function locatePersonImage(person, metadata = null) {
+  const badgeNo = person.data?.["Badge no."] || person.badgeNo || "";
+  for (const key of imageCandidateKeys(badgeNo, metadata?.objectKey || "")) {
+    const object = await headImageObject(key);
+    if (object) return object;
+  }
+  return null;
+}
+
+function imageInfoPayload(person, details = {}) {
+  const object = details.object || null;
+  const metadata = details.metadata || null;
+  const key = object?.key || metadata?.objectKey || "";
+
+  return {
+    configured: Boolean(details.configured),
+    available: Boolean(details.available),
+    missingConfig: details.missingConfig || [],
+    personId: Number(person.id),
+    badgeNo: person.data?.["Badge no."] || person.badgeNo || "",
+    fileName: imageFileNameFromKey(key),
+    contentType: object?.contentType || metadata?.contentType || "",
+    sizeBytes: Number(object?.sizeBytes || metadata?.sizeBytes || 0),
+    uploadedBy: metadata?.uploadedBy || "",
+    updatedAt: object?.updatedAt || metadata?.updatedAt || "",
+    url: details.available ? `/api/people/${person.id}/image` : "",
+    maxBytes: personImageMaxBytes(),
+  };
+}
+
+function parseImageUpload(body) {
+  const fileName = String(body?.fileName || "").trim();
+  const dataBase64 = String(body?.dataBase64 || "").replace(/^data:[^,]+;base64,/, "");
+  if (!dataBase64) throw statusError(400, "Choose a photo before uploading.");
+
+  const buffer = Buffer.from(dataBase64, "base64");
+  if (!buffer.length) throw statusError(400, "Uploaded photo is empty.");
+
+  const maxBytes = personImageMaxBytes();
+  if (buffer.length > maxBytes) {
+    throw statusError(413, `Photo must be ${formatBytes(maxBytes)} or smaller.`);
+  }
+
+  const detectedContentType = detectImageContentType(buffer);
+  if (!detectedContentType) throw statusError(400, "Only valid JPG, PNG, and WebP photos are supported.");
+
+  return {
+    buffer,
+    fileName,
+    contentType: detectedContentType,
+  };
+}
+
+function personImageHeaders(image) {
+  const fileName = safeHeaderFileName(imageFileNameFromKey(image.key) || "photo");
+  const headers = {
+    "Content-Type": image.contentType || "application/octet-stream",
+    "Content-Disposition": `inline; filename="${fileName}"`,
+    "Cache-Control": "private, max-age=300",
+  };
+  if (image.body?.length) headers["Content-Length"] = image.body.length;
+  return headers;
+}
+
 function formatSafeError(error) {
   return {
     name: error?.name || "Error",
@@ -427,6 +594,10 @@ function requireAdmin(res, user, message) {
 
 function isTruthyQueryValue(value) {
   return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());
+}
+
+function statusError(statusCode, message) {
+  return Object.assign(new Error(message), { statusCode });
 }
 
 function isAdminOnlyMutation(url, method) {
@@ -571,17 +742,23 @@ function auditCellValue(value) {
   return String(value);
 }
 
-function readJson(req) {
+function readJson(req, { maxBytes = 1_000_000 } = {}) {
   return new Promise((resolve, reject) => {
     let body = "";
+    let byteLength = 0;
+    let rejected = false;
     req.on("data", (chunk) => {
-      body += chunk;
-      if (body.length > 1_000_000) {
+      byteLength += chunk.length;
+      if (byteLength > maxBytes) {
+        rejected = true;
+        reject(statusError(413, "Request body too large."));
         req.destroy();
-        reject(new Error("Request body too large"));
+        return;
       }
+      body += chunk;
     });
     req.on("end", () => {
+      if (rejected) return;
       if (!body) {
         resolve({});
         return;
@@ -592,6 +769,18 @@ function readJson(req) {
         reject(error);
       }
     });
-    req.on("error", reject);
+    req.on("error", (error) => {
+      if (!rejected) reject(error);
+    });
   });
+}
+
+function safeHeaderFileName(value) {
+  return String(value || "photo").replace(/["\r\n]/g, "_");
+}
+
+function formatBytes(value) {
+  if (value >= 1024 * 1024) return `${Math.floor(value / (1024 * 1024))} MB`;
+  if (value >= 1024) return `${Math.floor(value / 1024)} KB`;
+  return `${value} bytes`;
 }

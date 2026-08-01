@@ -1097,6 +1097,166 @@ export async function getPerson(id) {
   return row ? rowToPerson(row) : null;
 }
 
+export async function getPersonImageMetadata(personId) {
+  await initializeDatabase();
+
+  const row = databaseProvider === "postgres"
+    ? (
+        await getPool().query(
+          `
+            SELECT
+              id,
+              person_id,
+              badge_no,
+              object_key,
+              content_type,
+              size_bytes,
+              etag,
+              uploaded_by,
+              created_at,
+              updated_at
+            FROM person_images
+            WHERE person_id = $1
+          `,
+          [Number(personId)]
+        )
+      ).rows[0]
+    : getSqlite()
+        .prepare(`
+          SELECT
+            id,
+            person_id,
+            badge_no,
+            object_key,
+            content_type,
+            size_bytes,
+            etag,
+            uploaded_by,
+            created_at,
+            updated_at
+          FROM person_images
+          WHERE person_id = ?
+        `)
+        .get(Number(personId));
+
+  return row ? rowToPersonImageMetadata(row) : null;
+}
+
+export async function savePersonImageMetadata(person, image, options = {}) {
+  await initializeDatabase();
+
+  if (!person?.id) throw statusError(400, "Person is required before a photo can be saved.");
+  const changedBy = normalizeChangedBy(options.changedBy);
+  const badgeNo = normalizeValue(image.badgeNo || person.data?.[badgeField] || person.badgeNo);
+  const oldMetadata = await getPersonImageMetadata(person.id);
+  const oldFileName = oldMetadata?.objectKey ? imageFileNameFromObjectKey(oldMetadata.objectKey) : "";
+  const newFileName = imageFileNameFromObjectKey(image.objectKey);
+  const change = {
+    "User Photo": {
+      old: oldFileName,
+      new: newFileName,
+    },
+  };
+
+  if (databaseProvider === "postgres") {
+    const client = await getPool().connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `
+          INSERT INTO person_images (
+            person_id,
+            badge_no,
+            object_key,
+            content_type,
+            size_bytes,
+            etag,
+            uploaded_by
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
+          ON CONFLICT (person_id) DO UPDATE
+          SET badge_no = EXCLUDED.badge_no,
+              object_key = EXCLUDED.object_key,
+              content_type = EXCLUDED.content_type,
+              size_bytes = EXCLUDED.size_bytes,
+              etag = EXCLUDED.etag,
+              uploaded_by = EXCLUDED.uploaded_by,
+              updated_at = NOW()
+        `,
+        [
+          Number(person.id),
+          badgeNo,
+          image.objectKey,
+          image.contentType,
+          Number(image.sizeBytes || 0),
+          image.etag || "",
+          changedBy,
+        ]
+      );
+      await client.query(
+        `
+          INSERT INTO audit_logs (person_id, name, badge_no, changed_by, action, "change")
+          VALUES ($1, $2, $3, $4, 'update', $5)
+        `,
+        [Number(person.id), person.fullName || "", badgeNo, changedBy, change]
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  } else {
+    const db = getSqlite();
+    db.exec("BEGIN");
+    try {
+      db
+        .prepare(`
+          INSERT INTO person_images (
+            person_id,
+            badge_no,
+            object_key,
+            content_type,
+            size_bytes,
+            etag,
+            uploaded_by
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(person_id) DO UPDATE
+          SET badge_no = excluded.badge_no,
+              object_key = excluded.object_key,
+              content_type = excluded.content_type,
+              size_bytes = excluded.size_bytes,
+              etag = excluded.etag,
+              uploaded_by = excluded.uploaded_by,
+              updated_at = CURRENT_TIMESTAMP
+        `)
+        .run(
+          Number(person.id),
+          badgeNo,
+          image.objectKey,
+          image.contentType,
+          Number(image.sizeBytes || 0),
+          image.etag || "",
+          changedBy
+        );
+      db
+        .prepare(`
+          INSERT INTO audit_logs (person_id, name, badge_no, changed_by, action, "change")
+          VALUES (?, ?, ?, ?, 'update', ?)
+        `)
+        .run(Number(person.id), person.fullName || "", badgeNo, changedBy, JSON.stringify(change));
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  return getPersonImageMetadata(person.id);
+}
+
 async function getPersonRow(id, { includeDeleted = false } = {}) {
   const deletedFilter = includeDeleted ? "" : " AND deleted_at IS NULL";
   return databaseProvider === "postgres"
@@ -1518,6 +1678,22 @@ function migrateSqlite() {
   }
   db.exec("CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_audit_logs_person_id ON audit_logs(person_id)");
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS person_images (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      person_id INTEGER NOT NULL UNIQUE REFERENCES people(id) ON DELETE CASCADE,
+      badge_no TEXT NOT NULL,
+      object_key TEXT NOT NULL,
+      content_type TEXT NOT NULL,
+      size_bytes INTEGER NOT NULL DEFAULT 0,
+      etag TEXT,
+      uploaded_by TEXT NOT NULL DEFAULT 'system',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_person_images_badge_no ON person_images(badge_no)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_person_images_object_key ON person_images(object_key)");
 }
 
 async function migratePostgres() {
@@ -1558,6 +1734,22 @@ async function migratePostgres() {
   await pool.query("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS action TEXT NOT NULL DEFAULT 'update'");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs (created_at DESC)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_audit_logs_person_id ON audit_logs (person_id)");
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS person_images (
+      id BIGSERIAL PRIMARY KEY,
+      person_id BIGINT NOT NULL UNIQUE REFERENCES people(id) ON DELETE CASCADE,
+      badge_no TEXT NOT NULL,
+      object_key TEXT NOT NULL,
+      content_type TEXT NOT NULL,
+      size_bytes BIGINT NOT NULL DEFAULT 0,
+      etag TEXT,
+      uploaded_by TEXT NOT NULL DEFAULT 'system',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_person_images_badge_no ON person_images (lower(badge_no))");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_person_images_object_key ON person_images (object_key)");
 }
 
 function seedSqlite() {
@@ -2417,6 +2609,25 @@ function rowToAuditLog(row) {
     createdAt: row.created_at || "",
     restorable: Boolean(row.restorable),
   };
+}
+
+function rowToPersonImageMetadata(row) {
+  return {
+    id: Number(row.id),
+    personId: Number(row.person_id),
+    badgeNo: row.badge_no || "",
+    objectKey: row.object_key || "",
+    contentType: row.content_type || "",
+    sizeBytes: Number(row.size_bytes || 0),
+    etag: row.etag || "",
+    uploadedBy: row.uploaded_by || "system",
+    createdAt: row.created_at || "",
+    updatedAt: row.updated_at || "",
+  };
+}
+
+function imageFileNameFromObjectKey(value) {
+  return String(value || "").split("/").filter(Boolean).pop() || "";
 }
 
 function auditLogSelectSql(whereClause = "", limitClause = "") {
