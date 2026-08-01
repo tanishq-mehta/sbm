@@ -222,8 +222,7 @@ async function r2Request(method, key, { body, headers = {} } = {}) {
   const signature = hmacHex(signingKey, stringToSign);
 
   requestHeaders.authorization = [
-    "AWS4-HMAC-SHA256",
-    `Credential=${config.accessKeyId}/${credentialScope}`,
+    `AWS4-HMAC-SHA256 Credential=${config.accessKeyId}/${credentialScope}`,
     `SignedHeaders=${signedHeaders.join(";")}`,
     `Signature=${signature}`,
   ].join(", ");
