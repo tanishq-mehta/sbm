@@ -484,12 +484,19 @@ async function personImageInfo(person) {
   }
 
   const metadata = await getPersonImageMetadata(person.id);
-  const object = await locatePersonImage(person, metadata);
+  let object = null;
+  let storageError = "";
+  try {
+    object = await locatePersonImage(person, metadata);
+  } catch (error) {
+    storageError = formatSafeError(error).message;
+  }
   return imageInfoPayload(person, {
     configured: true,
     available: Boolean(object),
     metadata,
     object,
+    storageError,
   });
 }
 
@@ -511,6 +518,7 @@ function imageInfoPayload(person, details = {}) {
     configured: Boolean(details.configured),
     available: Boolean(details.available),
     missingConfig: details.missingConfig || [],
+    storageError: details.storageError || "",
     personId: Number(person.id),
     badgeNo: person.data?.["Badge no."] || person.badgeNo || "",
     fileName: imageFileNameFromKey(key),

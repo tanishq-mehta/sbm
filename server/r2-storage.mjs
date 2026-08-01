@@ -152,9 +152,11 @@ async function r2Request(method, key, { body, headers = {} } = {}) {
   const now = new Date();
   const amzDate = formatAmzDate(now);
   const shortDate = amzDate.slice(0, 8);
-  const host = `${config.accountId}.r2.cloudflarestorage.com`;
-  const canonicalUri = `/${encodePathSegment(config.bucket)}/${encodeKeyPath(key)}`;
-  const url = `https://${host}${canonicalUri}`;
+  const endpoint = r2EndpointUrl(config.accountId);
+  const host = endpoint.host;
+  const basePath = endpoint.pathname.replace(/\/+$/, "");
+  const canonicalUri = `${basePath}/${encodePathSegment(config.bucket)}/${encodeKeyPath(key)}`;
+  const url = `${endpoint.origin}${canonicalUri}`;
   const requestHeaders = {
     host,
     "x-amz-content-sha256": payloadHash,
@@ -209,6 +211,20 @@ function getR2Config() {
     secretAccessKey: process.env.R2_SECRET_ACCESS_KEY.trim(),
     bucket: process.env.R2_BUCKET.trim(),
   };
+}
+
+function r2EndpointUrl(accountId) {
+  const explicitEndpoint = process.env.R2_ENDPOINT?.trim();
+  const endpoint = explicitEndpoint ||
+    (String(accountId).startsWith("http")
+      ? accountId
+      : `https://${accountId}.r2.cloudflarestorage.com`);
+
+  try {
+    return new URL(endpoint);
+  } catch {
+    throw statusError(503, "R2 endpoint is not valid. Use https://<ACCOUNT_ID>.r2.cloudflarestorage.com.");
+  }
 }
 
 function imageObjectKey(fileName) {

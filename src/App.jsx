@@ -1090,7 +1090,8 @@ function PersonPage({ id, token, isNew = false, canManageUsers = false, returnTo
 
   const groupedSections = useMemo(() => buildSections(fields), [fields]);
   const backTarget = returnTo || "#/home";
-  const imageStorageReady = imageInfo?.configured === true;
+  const imageStorageError = imageInfo?.storageError || imageError;
+  const imageStorageReady = imageInfo?.configured === true && !imageStorageError;
   const imageMaxBytes = Number(imageInfo?.maxBytes || PERSON_IMAGE_MAX_BYTES);
 
   function updateField(field, value) {
@@ -1244,7 +1245,7 @@ function PersonPage({ id, token, isNew = false, canManageUsers = false, returnTo
               <img src={imagePreviewUrl} alt={`${displayFullName(formData) || "User"} photo`} />
             ) : (
               <span className="photo-placeholder">
-                {imageStorageReady ? "No photo uploaded" : "Image storage not configured"}
+                {photoPlaceholderText({ imageInfo, imageStorageError })}
               </span>
             )}
           </div>
@@ -1279,7 +1280,7 @@ function PersonPage({ id, token, isNew = false, canManageUsers = false, returnTo
               </button>
             </div>
             {imageFile ? <p className="photo-meta">Selected: {imageFile.name}</p> : null}
-            {imageError ? <p className="form-error">{imageError}</p> : null}
+            {imageStorageError ? <p className="form-error">{imageStorageError}</p> : null}
           </div>
         </section>
       ) : null}
@@ -1394,6 +1395,12 @@ function FieldControl({ field, value, options = [], readOnly = false, placeholde
       )}
     </label>
   );
+}
+
+function photoPlaceholderText({ imageInfo, imageStorageError }) {
+  if (imageStorageError) return "Image storage check failed";
+  if (imageInfo?.configured === false) return "Image storage not configured";
+  return "No photo uploaded";
 }
 
 async function apiFetch(path, { token, method = "GET", body } = {}) {
