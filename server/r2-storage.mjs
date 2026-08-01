@@ -120,6 +120,42 @@ export async function putImageObject(key, buffer, contentType) {
   };
 }
 
+export async function diagnoseImageStorage() {
+  const status = imageStorageStatus();
+  if (!status.configured) {
+    return {
+      configured: false,
+      ok: false,
+      missing: status.missing,
+      message: "Image storage environment variables are missing.",
+    };
+  }
+
+  const config = getR2Config();
+  const endpoint = r2EndpointUrl(config.accountId);
+  const probeKey = imageObjectKey("__diagnostics__/read-check.txt");
+  const response = await r2Request("GET", probeKey);
+  const body = await response.text().catch(() => "");
+  const ok = response.ok || response.status === 404;
+
+  return {
+    configured: true,
+    ok,
+    endpoint: `${endpoint.origin}${endpoint.pathname.replace(/\/+$/, "")}`,
+    bucket: config.bucket,
+    prefix: normalizePrefix(process.env.R2_IMAGE_PREFIX || "").replace(/\/$/, ""),
+    probeKey,
+    probeStatus: response.status,
+    probeStatusText: response.statusText || "",
+    message: ok
+      ? response.status === 404
+        ? "R2 credentials and bucket are reachable. The probe object does not exist, which is expected."
+        : "R2 credentials and bucket are reachable."
+      : "R2 rejected the probe request.",
+    responseBody: sanitizeR2ResponseBody(body),
+  };
+}
+
 export function personImageMaxBytes() {
   const configured = Number(process.env.PERSON_IMAGE_MAX_BYTES);
   return Number.isFinite(configured) && configured > 0
@@ -304,10 +340,17 @@ async function throwR2Error(response, action) {
   const text = await response.text().catch(() => "");
   throw statusError(
     response.status || 500,
-    `Could not ${action} in image storage (${response.status}).${text ? ` ${text.slice(0, 300)}` : ""}`
+    `Could not ${action} in image storage (${response.status}).${text ? ` ${sanitizeR2ResponseBody(text)}` : ""}`
   );
 }
 
 function statusError(statusCode, message) {
   return Object.assign(new Error(message), { statusCode });
+}
+
+function sanitizeR2ResponseBody(value) {
+  return String(value || "")
+    .replaceAll(process.env.R2_ACCESS_KEY_ID || "__NO_R2_ACCESS_KEY__", "[R2_ACCESS_KEY_ID]")
+    .replaceAll(process.env.R2_SECRET_ACCESS_KEY || "__NO_R2_SECRET__", "[R2_SECRET_ACCESS_KEY]")
+    .slice(0, 800);
 }

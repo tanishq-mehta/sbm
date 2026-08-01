@@ -37,6 +37,7 @@ import {
 } from "./auth.mjs";
 import {
   detectImageContentType,
+  diagnoseImageStorage,
   getImageObject,
   headImageObject,
   imageCandidateKeys,
@@ -300,6 +301,14 @@ export async function handleApiRequest(req, res) {
         returnSummary: true,
       });
       sendJson(res, 200, result);
+      return;
+    }
+
+    if (url.pathname === "/api/admin/image-storage-check" && req.method === "GET") {
+      if (!requireAdmin(res, authenticatedUser, "Only admin users can check image storage.")) {
+        return;
+      }
+      sendJson(res, 200, await diagnoseImageStorage());
       return;
     }
 
