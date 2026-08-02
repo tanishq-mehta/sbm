@@ -14,6 +14,7 @@ const contentTypesByExtension = new Map([
 
 const args = process.argv.slice(2);
 const apply = args.includes("--apply");
+const replaceExisting = args.includes("--replace");
 const imageFolder = args.find((arg) => !arg.startsWith("--"));
 
 if (args.includes("--help") || args.includes("-h")) {
@@ -32,6 +33,7 @@ const baseUrl = trimTrailingSlash(readRequiredEnv("PROD_API_BASE_URL"));
 const username = readRequiredEnv("PROD_ADMIN_USERNAME");
 const password = readRequiredEnv("PROD_ADMIN_PASSWORD");
 const maxBytes = readMaxBytes();
+const concurrency = readConcurrency();
 
 const folderPath = path.resolve(imageFolder);
 if (!fs.existsSync(folderPath) || !fs.statSync(folderPath).isDirectory()) {
@@ -45,7 +47,7 @@ if (!imageFiles.length) {
 
 const { token, user } = await login();
 console.error(`Logged in as ${user.username}${user.isAdmin ? " (admin)" : ""}`);
-console.error(`${apply ? "Uploading" : "Dry run for"} ${imageFiles.length} image file(s).`);
+console.error(`${apply ? "Uploading" : "Dry run for"} ${imageFiles.length} image file(s) with concurrency ${concurrency}.`);
 
 const result = {
   mode: apply ? "apply" : "dry-run",
@@ -53,6 +55,7 @@ const result = {
   totalFiles: imageFiles.length,
   matched: 0,
   uploaded: 0,
+  skippedExisting: 0,
   unmatched: [],
   duplicateMatches: [],
   duplicateFiles: [],
@@ -60,6 +63,7 @@ const result = {
   failed: [],
 };
 const seenBadges = new Map();
+const tasks = [];
 
 for (const filePath of imageFiles) {
   const fileName = path.basename(filePath);
@@ -93,40 +97,69 @@ for (const filePath of imageFiles) {
     continue;
   }
 
-  const person = await findPersonByBadge(badgeNo);
-  if (!person) {
-    result.unmatched.push({ badgeNo, fileName, reason: "No exact badge match in app data" });
-    continue;
-  }
-  if (person.duplicate) {
-    result.duplicateMatches.push({ badgeNo, fileName, matches: person.matches });
-    continue;
-  }
-
-  result.matched += 1;
-  if (!apply) continue;
-
-  try {
-    await uploadPhoto(person.id, filePath, contentTypesByExtension.get(extension));
-    result.uploaded += 1;
-  } catch (error) {
-    result.failed.push({
-      badgeNo,
-      fileName,
-      personId: person.id,
-      error: error.message,
-    });
-  }
+  tasks.push({ badgeNo, extension, fileName, filePath });
 }
+
+let processedTasks = 0;
+await runWithConcurrency(tasks, concurrency, processImageFile);
 
 console.log(JSON.stringify({
   ...result,
+  totalUniqueFiles: tasks.length,
   unmatched: result.unmatched.slice(0, 100),
   duplicateMatches: result.duplicateMatches.slice(0, 100),
   duplicateFiles: result.duplicateFiles.slice(0, 100),
   tooLarge: result.tooLarge.slice(0, 100),
   failed: result.failed.slice(0, 100),
 }, null, 2));
+
+async function processImageFile({ badgeNo, extension, fileName, filePath }) {
+  try {
+    const person = await findPersonByBadge(badgeNo);
+    if (!person) {
+      result.unmatched.push({ badgeNo, fileName, reason: "No exact badge match in app data" });
+      return;
+    }
+    if (person.duplicate) {
+      result.duplicateMatches.push({ badgeNo, fileName, matches: person.matches });
+      return;
+    }
+
+    result.matched += 1;
+    if (!apply) return;
+
+    if (!replaceExisting) {
+      const imageInfo = await apiRequest("GET", `/api/people/${person.id}/image-info`);
+      if (imageInfo.available) {
+        result.skippedExisting += 1;
+        return;
+      }
+    }
+
+    try {
+      await uploadPhoto(person.id, filePath, contentTypesByExtension.get(extension));
+      result.uploaded += 1;
+    } catch (error) {
+      result.failed.push({
+        badgeNo,
+        fileName,
+        personId: person.id,
+        error: error.message,
+      });
+    }
+  } catch (error) {
+    result.failed.push({
+      badgeNo,
+      fileName,
+      error: error.message,
+    });
+  } finally {
+    processedTasks += 1;
+    if (processedTasks % 100 === 0 || processedTasks === tasks.length) {
+      console.error(`Processed ${processedTasks}/${tasks.length} unique image file(s).`);
+    }
+  }
+}
 
 async function findPersonByBadge(badgeNo) {
   const params = new URLSearchParams({
@@ -222,6 +255,18 @@ function collectImageFiles(folder) {
   return files.sort((left, right) => left.localeCompare(right, "en", { numeric: true, sensitivity: "base" }));
 }
 
+async function runWithConcurrency(items, limit, worker) {
+  let index = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (index < items.length) {
+      const item = items[index];
+      index += 1;
+      await worker(item);
+    }
+  });
+  await Promise.all(workers);
+}
+
 function loadEnvFile(filePath) {
   if (!fs.existsSync(filePath)) {
     fail(`Missing ${filePath}. Create it with PROD_API_BASE_URL, PROD_ADMIN_USERNAME, and PROD_ADMIN_PASSWORD.`);
@@ -260,6 +305,13 @@ function readMaxBytes() {
     : 3 * 1024 * 1024;
 }
 
+function readConcurrency() {
+  const arg = args.find((value) => value.startsWith("--concurrency="));
+  const configured = Number(arg?.split("=", 2)[1] || process.env.IMAGE_UPLOAD_CONCURRENCY || 12);
+  if (!Number.isFinite(configured) || configured <= 0) return 12;
+  return Math.min(Math.floor(configured), 25);
+}
+
 function normalizeBadge(value) {
   return String(value || "").trim().toUpperCase();
 }
@@ -281,6 +333,8 @@ function printUsage() {
   console.log(`Usage:
   node scripts/upload_person_images_to_r2.mjs /path/to/image-folder
   node scripts/upload_person_images_to_r2.mjs /path/to/image-folder --apply
+  node scripts/upload_person_images_to_r2.mjs /path/to/image-folder --apply --replace
+  node scripts/upload_person_images_to_r2.mjs /path/to/image-folder --apply --concurrency=12
 
 Dry-run is the default. Filenames must be exact badge numbers, for example:
   PR0012GA1007.jpg
@@ -294,5 +348,6 @@ Environment:
 
 Optional:
     PERSON_IMAGE_MAX_BYTES=3145728
+    IMAGE_UPLOAD_CONCURRENCY=12
 `);
 }
