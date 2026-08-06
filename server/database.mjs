@@ -34,13 +34,14 @@ const emailField = "Email Id";
 const serialField = "S No";
 const badgeField = "Badge no.";
 const statusField = "Status";
+const birthDateField = "Birth Date";
 const verificationField = "Verification Status";
 const genderField = "Gender";
 const localCentreField = "Sewa Dept - Local Centre";
 const majorCentreField = "Sewa Dept - Major Centre";
 const verificationOptions = ["None", "Verification Done", "Rectification Done"];
 const statusOptions = ["PERMANENT", "OPEN", "ELDERLY", "NEW", "NI", "ESS", "VSS"];
-const dateFields = new Set(["Birth Date", "Initiation Date"]);
+const dateFields = new Set([birthDateField, "Initiation Date"]);
 const departmentFields = new Set([localCentreField, majorCentreField]);
 const placeholderTextFields = new Set(["Profession", "Educational Qualification"]);
 const placeholderTextValues = new Set([
@@ -834,6 +835,80 @@ export async function listAllPeople() {
   return (await getAllPersonRows()).map(rowToPerson);
 }
 
+export async function listElderlyAlerts() {
+  await initializeDatabase();
+
+  const rows = databaseProvider === "postgres"
+    ? (
+        await getPool().query(`
+          SELECT
+            ea.id AS alert_id,
+            ea.person_id,
+            ea.name AS alert_name,
+            ea.badge_no AS alert_badge_no,
+            ea.birth_date AS alert_birth_date,
+            ea.turns_70_on,
+            ea.status_at_detection,
+            ea.detected_at,
+            ea.resolved_at,
+            p.id,
+            p.full_name,
+            p.badge_no,
+            p.department,
+            p.phone_number,
+            p.data,
+            p.updated_at,
+            p.deleted_at
+          FROM elderly_alerts AS ea
+          INNER JOIN people AS p ON p.id = ea.person_id
+          WHERE ea.resolved_at IS NULL
+            AND p.deleted_at IS NULL
+          ORDER BY ea.turns_70_on ASC, lower(p.full_name), ea.id
+        `)
+      ).rows
+    : getSqlite()
+        .prepare(`
+          SELECT
+            ea.id AS alert_id,
+            ea.person_id,
+            ea.name AS alert_name,
+            ea.badge_no AS alert_badge_no,
+            ea.birth_date AS alert_birth_date,
+            ea.turns_70_on,
+            ea.status_at_detection,
+            ea.detected_at,
+            ea.resolved_at,
+            p.id,
+            p.full_name,
+            p.badge_no,
+            p.department,
+            p.phone_number,
+            p.data,
+            p.updated_at,
+            p.deleted_at
+          FROM elderly_alerts AS ea
+          INNER JOIN people AS p ON p.id = ea.person_id
+          WHERE ea.resolved_at IS NULL
+            AND p.deleted_at IS NULL
+          ORDER BY ea.turns_70_on ASC, p.full_name COLLATE NOCASE, ea.id
+        `)
+        .all();
+
+  const results = rows
+    .map(rowToElderlyAlert)
+    .filter((alert) => alert && alert.status !== "ELDERLY");
+
+  return {
+    total: results.length,
+    results,
+  };
+}
+
+export async function runElderlyAlertScan(options = {}) {
+  await initializeDatabase();
+  return runElderlyAlertScanInternal(options);
+}
+
 export function getLocationOptions({ state = "", district = "" } = {}) {
   const states = locationOptions.states || [];
   const selectedState = findOption(state, states);
@@ -1305,6 +1380,347 @@ async function getAllPersonRows() {
     .all();
 }
 
+async function runElderlyAlertScanInternal(options = {}) {
+  const asOfParts = datePartsFromDate(options.asOf || new Date());
+  const asOfIso = datePartsToIso(asOfParts);
+  const source = normalizeValue(options.source || options.changedBy || "manual") || "manual";
+  const runKey = normalizeValue(options.runKey);
+  const people = (await getAllPersonRows()).map(rowToPerson);
+  const pendingBefore = await pendingElderlyAlertPersonIds();
+  const scanPlan = buildElderlyAlertScanPlan(people, asOfParts, pendingBefore);
+
+  if (databaseProvider === "postgres") {
+    const client = await getPool().connect();
+    try {
+      await client.query("BEGIN");
+      const claimedRunId = runKey
+        ? await claimElderlyAlertRunPostgres(client, runKey, source)
+        : null;
+      if (runKey && !claimedRunId) {
+        await client.query("ROLLBACK");
+        return getExistingElderlyAlertRunSummary(runKey);
+      }
+
+      const changed = await upsertElderlyAlertsPostgres(client, scanPlan.alerts);
+
+      const pendingTotal = await pendingElderlyAlertCountPostgres(client);
+      const summary = elderlyAlertScanSummary({
+        runKey,
+        source,
+        asOfIso,
+        people,
+        scanPlan,
+        changed,
+        pendingTotal,
+      });
+
+      if (claimedRunId) {
+        await client.query(
+          "UPDATE elderly_alert_runs SET summary = $1 WHERE id = $2",
+          [summary, claimedRunId]
+        );
+      }
+      await client.query("COMMIT");
+      return summary;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  const db = getSqlite();
+  db.exec("BEGIN");
+  try {
+    const claimedRunId = runKey
+      ? claimElderlyAlertRunSqlite(db, runKey, source)
+      : null;
+    if (runKey && !claimedRunId) {
+      db.exec("COMMIT");
+      return getExistingElderlyAlertRunSummary(runKey);
+    }
+
+    const upsertAlert = db.prepare(`
+      INSERT INTO elderly_alerts (
+        person_id,
+        name,
+        badge_no,
+        birth_date,
+        turns_70_on,
+        status_at_detection
+      )
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(person_id) DO UPDATE
+      SET name = excluded.name,
+          badge_no = excluded.badge_no,
+          birth_date = excluded.birth_date,
+          turns_70_on = excluded.turns_70_on,
+          status_at_detection = excluded.status_at_detection,
+          resolved_at = NULL
+      WHERE elderly_alerts.resolved_at IS NOT NULL
+    `);
+
+    let changed = 0;
+    for (const alert of scanPlan.alerts) {
+      const result = upsertAlert.run(
+        alert.personId,
+        alert.name,
+        alert.badgeNo,
+        alert.birthDate,
+        alert.turns70On,
+        alert.status
+      );
+      changed += result.changes;
+    }
+
+    const pendingTotal = pendingElderlyAlertCountSqlite(db);
+    const summary = elderlyAlertScanSummary({
+      runKey,
+      source,
+      asOfIso,
+      people,
+      scanPlan,
+      changed,
+      pendingTotal,
+    });
+
+    if (claimedRunId) {
+      db
+        .prepare("UPDATE elderly_alert_runs SET summary = ? WHERE id = ?")
+        .run(JSON.stringify(summary), claimedRunId);
+    }
+    db.exec("COMMIT");
+    return summary;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function buildElderlyAlertScanPlan(people, asOfParts, pendingBefore) {
+  const plan = {
+    alerts: [],
+    alreadyPending: 0,
+    skippedNoBirthDate: 0,
+    skippedElderly: 0,
+    skippedNotYet70: 0,
+  };
+  const asOfIso = datePartsToIso(asOfParts);
+
+  for (const person of people) {
+    const data = person.data || {};
+    const status = normalizeStatusValue(data[statusField]);
+    if (status === "ELDERLY") {
+      plan.skippedElderly += 1;
+      continue;
+    }
+
+    const birthParts = parseDateParts(data[birthDateField]);
+    if (!birthParts) {
+      plan.skippedNoBirthDate += 1;
+      continue;
+    }
+
+    const turns70 = addYearsToDateParts(birthParts, 70);
+    const turns70Iso = datePartsToIso(turns70);
+    if (turns70Iso > asOfIso) {
+      plan.skippedNotYet70 += 1;
+      continue;
+    }
+
+    if (pendingBefore.has(Number(person.id))) {
+      plan.alreadyPending += 1;
+    }
+
+    plan.alerts.push({
+      personId: Number(person.id),
+      name: person.fullName || "",
+      badgeNo: normalizeValue(data[badgeField] || person.badgeNo),
+      birthDate: normalizeDateValue(data[birthDateField]),
+      turns70On: turns70Iso,
+      status,
+    });
+  }
+
+  return plan;
+}
+
+async function pendingElderlyAlertPersonIds() {
+  if (databaseProvider === "postgres") {
+    const { rows } = await getPool().query("SELECT person_id FROM elderly_alerts WHERE resolved_at IS NULL");
+    return new Set(rows.map((row) => Number(row.person_id)));
+  }
+
+  return new Set(
+    getSqlite()
+      .prepare("SELECT person_id FROM elderly_alerts WHERE resolved_at IS NULL")
+      .all()
+      .map((row) => Number(row.person_id))
+  );
+}
+
+async function upsertElderlyAlertsPostgres(client, alerts) {
+  const batchSize = 500;
+  let changed = 0;
+
+  for (let start = 0; start < alerts.length; start += batchSize) {
+    const batch = alerts.slice(start, start + batchSize);
+    const values = [];
+    const placeholders = batch.map((alert, index) => {
+      const offset = index * 6;
+      values.push(
+        alert.personId,
+        alert.name,
+        alert.badgeNo,
+        alert.birthDate,
+        alert.turns70On,
+        alert.status
+      );
+      return `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}, $${offset + 5}, $${offset + 6})`;
+    });
+
+    const result = await client.query(
+      `
+        INSERT INTO elderly_alerts (
+          person_id,
+          name,
+          badge_no,
+          birth_date,
+          turns_70_on,
+          status_at_detection
+        )
+        VALUES ${placeholders.join(", ")}
+        ON CONFLICT (person_id) DO UPDATE
+        SET name = EXCLUDED.name,
+            badge_no = EXCLUDED.badge_no,
+            birth_date = EXCLUDED.birth_date,
+            turns_70_on = EXCLUDED.turns_70_on,
+            status_at_detection = EXCLUDED.status_at_detection,
+            resolved_at = NULL
+        WHERE elderly_alerts.resolved_at IS NOT NULL
+      `,
+      values
+    );
+    changed += result.rowCount;
+  }
+
+  return changed;
+}
+
+async function claimElderlyAlertRunPostgres(client, runKey, source) {
+  const { rows } = await client.query(
+    `
+      INSERT INTO elderly_alert_runs (run_key, source, summary)
+      VALUES ($1, $2, $3)
+      ON CONFLICT (run_key) DO NOTHING
+      RETURNING id
+    `,
+    [runKey, source, {}]
+  );
+  return rows[0]?.id || null;
+}
+
+function claimElderlyAlertRunSqlite(db, runKey, source) {
+  const result = db
+    .prepare("INSERT OR IGNORE INTO elderly_alert_runs (run_key, source, summary) VALUES (?, ?, ?)")
+    .run(runKey, source, "{}");
+  if (!result.changes) return null;
+  return Number(result.lastInsertRowid);
+}
+
+async function getExistingElderlyAlertRunSummary(runKey) {
+  const row = databaseProvider === "postgres"
+    ? (
+        await getPool().query(
+          "SELECT run_key, source, summary, created_at FROM elderly_alert_runs WHERE run_key = $1",
+          [runKey]
+        )
+      ).rows[0]
+    : getSqlite()
+        .prepare("SELECT run_key, source, summary, created_at FROM elderly_alert_runs WHERE run_key = ?")
+        .get(runKey);
+
+  const summary = row?.summary
+    ? typeof row.summary === "string"
+      ? JSON.parse(row.summary)
+      : row.summary
+    : {};
+
+  return {
+    ...summary,
+    runKey,
+    source: row?.source || summary.source || "",
+    skipped: true,
+    message: "This scan has already run.",
+    createdAt: row?.created_at || "",
+  };
+}
+
+async function pendingElderlyAlertCountPostgres(client) {
+  const { rows } = await client.query(`
+    SELECT COUNT(*)::int AS total
+    FROM elderly_alerts AS ea
+    INNER JOIN people AS p ON p.id = ea.person_id
+    WHERE ea.resolved_at IS NULL
+      AND p.deleted_at IS NULL
+      AND upper(coalesce(p.data->>$1, '')) <> 'ELDERLY'
+  `, [statusField]);
+  return rows[0]?.total || 0;
+}
+
+function pendingElderlyAlertCountSqlite(db) {
+  const rows = db
+    .prepare(`
+      SELECT p.data
+      FROM elderly_alerts AS ea
+      INNER JOIN people AS p ON p.id = ea.person_id
+      WHERE ea.resolved_at IS NULL
+        AND p.deleted_at IS NULL
+    `)
+    .all();
+  return rows.filter((row) => normalizeStatusValue(JSON.parse(row.data)?.[statusField]) !== "ELDERLY").length;
+}
+
+function elderlyAlertScanSummary({
+  runKey,
+  source,
+  asOfIso,
+  people,
+  scanPlan,
+  changed,
+  pendingTotal,
+}) {
+  return {
+    ok: true,
+    runKey: runKey || "",
+    source,
+    asOf: asOfIso,
+    checked: people.length,
+    eligible: scanPlan.alerts.length,
+    createdOrReopened: changed,
+    alreadyPending: scanPlan.alreadyPending,
+    skippedElderly: scanPlan.skippedElderly,
+    skippedNoBirthDate: scanPlan.skippedNoBirthDate,
+    skippedNotYet70: scanPlan.skippedNotYet70,
+    pendingTotal,
+  };
+}
+
+async function resolveElderlyAlertForPerson(clientOrDb, personId) {
+  if (databaseProvider === "postgres") {
+    await clientOrDb.query(
+      "UPDATE elderly_alerts SET resolved_at = NOW() WHERE person_id = $1 AND resolved_at IS NULL",
+      [Number(personId)]
+    );
+    return;
+  }
+
+  clientOrDb
+    .prepare("UPDATE elderly_alerts SET resolved_at = CURRENT_TIMESTAMP WHERE person_id = ? AND resolved_at IS NULL")
+    .run(Number(personId));
+}
+
 export async function updatePerson(id, incomingData, options = {}) {
   const existing = await getPerson(id);
   if (!existing) return null;
@@ -1349,6 +1765,9 @@ export async function updatePerson(id, incomingData, options = {}) {
         `,
         [Number(id), summary.fullName, summary.badgeNo, changedBy, change]
       );
+      if (normalizeStatusValue(data[statusField]) === "ELDERLY") {
+        await resolveElderlyAlertForPerson(client, id);
+      }
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
@@ -1385,6 +1804,9 @@ export async function updatePerson(id, incomingData, options = {}) {
           VALUES (?, ?, ?, ?, 'update', ?)
         `)
         .run(Number(id), summary.fullName, summary.badgeNo, changedBy, JSON.stringify(change));
+      if (normalizeStatusValue(data[statusField]) === "ELDERLY") {
+        await resolveElderlyAlertForPerson(db, id);
+      }
       db.exec("COMMIT");
     } catch (error) {
       db.exec("ROLLBACK");
@@ -1694,6 +2116,31 @@ function migrateSqlite() {
   `);
   db.exec("CREATE INDEX IF NOT EXISTS idx_person_images_badge_no ON person_images(badge_no)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_person_images_object_key ON person_images(object_key)");
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS elderly_alerts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      person_id INTEGER NOT NULL UNIQUE REFERENCES people(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      badge_no TEXT,
+      birth_date TEXT NOT NULL,
+      turns_70_on TEXT NOT NULL,
+      status_at_detection TEXT,
+      detected_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      resolved_at TEXT
+    )
+  `);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_elderly_alerts_resolved_at ON elderly_alerts(resolved_at)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_elderly_alerts_turns_70_on ON elderly_alerts(turns_70_on)");
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS elderly_alert_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_key TEXT NOT NULL UNIQUE,
+      source TEXT NOT NULL,
+      summary TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_elderly_alert_runs_created_at ON elderly_alert_runs(created_at)");
 }
 
 async function migratePostgres() {
@@ -1750,6 +2197,31 @@ async function migratePostgres() {
   `);
   await pool.query("CREATE INDEX IF NOT EXISTS idx_person_images_badge_no ON person_images (lower(badge_no))");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_person_images_object_key ON person_images (object_key)");
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS elderly_alerts (
+      id BIGSERIAL PRIMARY KEY,
+      person_id BIGINT NOT NULL UNIQUE REFERENCES people(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      badge_no TEXT,
+      birth_date TEXT NOT NULL,
+      turns_70_on DATE NOT NULL,
+      status_at_detection TEXT,
+      detected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      resolved_at TIMESTAMPTZ
+    )
+  `);
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_elderly_alerts_resolved_at ON elderly_alerts (resolved_at)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_elderly_alerts_turns_70_on ON elderly_alerts (turns_70_on)");
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS elderly_alert_runs (
+      id BIGSERIAL PRIMARY KEY,
+      run_key TEXT NOT NULL UNIQUE,
+      source TEXT NOT NULL,
+      summary JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_elderly_alert_runs_created_at ON elderly_alert_runs (created_at DESC)");
 }
 
 function seedSqlite() {
@@ -2384,6 +2856,57 @@ function validDate(year, month, day) {
   return { year, month, day };
 }
 
+function datePartsFromDate(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return datePartsFromDate(new Date());
+  return {
+    year: date.getUTCFullYear(),
+    month: date.getUTCMonth() + 1,
+    day: date.getUTCDate(),
+  };
+}
+
+function datePartsToIso(parts) {
+  return [
+    String(parts.year).padStart(4, "0"),
+    String(parts.month).padStart(2, "0"),
+    String(parts.day).padStart(2, "0"),
+  ].join("-");
+}
+
+function dateOnlyValue(value) {
+  if (!value) return "";
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value.toISOString().slice(0, 10);
+  }
+  return String(value).slice(0, 10);
+}
+
+function addYearsToDateParts(parts, years) {
+  const targetYear = parts.year + years;
+  const day = Math.min(parts.day, daysInMonth(targetYear, parts.month));
+  return {
+    year: targetYear,
+    month: parts.month,
+    day,
+  };
+}
+
+function daysInMonth(year, month) {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+function ageOnDate(birthParts, asOfParts) {
+  let age = asOfParts.year - birthParts.year;
+  if (
+    asOfParts.month < birthParts.month ||
+    (asOfParts.month === birthParts.month && asOfParts.day < birthParts.day)
+  ) {
+    age -= 1;
+  }
+  return age;
+}
+
 export function sanitizeEmailValue(value) {
   const withoutLabel = normalizeValue(value).replace(
     /^\s*email\s*id\s*[:;\-]?\s*/i,
@@ -2594,6 +3117,25 @@ function rowToPerson(row) {
     updatedAt: row.updated_at || "",
     deletedAt: row.deleted_at || "",
     data: typeof row.data === "string" ? JSON.parse(row.data) : row.data,
+  };
+}
+
+function rowToElderlyAlert(row) {
+  const person = rowToPerson(row);
+  const data = person.data || {};
+  const birthDate = normalizeDateValue(data[birthDateField] || row.alert_birth_date);
+  const birthParts = parseDateParts(birthDate);
+
+  return {
+    id: Number(row.alert_id),
+    personId: Number(row.person_id),
+    name: person.fullName || row.alert_name || "(No name)",
+    badgeNo: normalizeValue(data[badgeField] || person.badgeNo || row.alert_badge_no),
+    birthDate,
+    turns70On: dateOnlyValue(row.turns_70_on),
+    age: birthParts ? ageOnDate(birthParts, datePartsFromDate(new Date())) : null,
+    status: normalizeStatusValue(data[statusField]),
+    detectedAt: row.detected_at || "",
   };
 }
 

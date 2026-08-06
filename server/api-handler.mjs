@@ -16,6 +16,7 @@ import {
   initializeDatabase,
   listAuditLogs,
   listAllAuditLogs,
+  listElderlyAlerts,
   listAllPeople,
   listDataQualityPeople,
   listPeople,
@@ -23,6 +24,7 @@ import {
   normalizeDepartmentValues,
   renumberSerialNumbers,
   restorePersonFromAudit,
+  runElderlyAlertScan,
   savePersonImageMetadata,
   sbmExportFields,
   searchableFields,
@@ -103,6 +105,20 @@ export async function handleApiRequest(req, res) {
       } else {
         sendJson(res, 401, { message: "Invalid username or password." });
       }
+      return;
+    }
+
+    if (url.pathname === "/api/cron/elderly-alerts" && req.method === "GET") {
+      if (!isValidCronRequest(req)) {
+        sendJson(res, 401, { message: "Cron authorization required." });
+        return;
+      }
+
+      await ensureDatabaseInitialized();
+      sendJson(res, 200, await runElderlyAlertScan({
+        runKey: elderlyAlertMonthlyRunKey(),
+        source: "vercel-cron",
+      }));
       return;
     }
 
@@ -237,11 +253,26 @@ export async function handleApiRequest(req, res) {
       return;
     }
 
+    if (url.pathname === "/api/elderly-alerts" && req.method === "GET") {
+      sendJson(res, 200, await listElderlyAlerts());
+      return;
+    }
+
     if (url.pathname === "/api/admin/renumber-sno" && req.method === "POST") {
       const body = await readJson(req);
       sendJson(res, 200, await renumberSerialNumbers({
         batchSize: body.batchSize,
         dryRun: Boolean(body.dryRun),
+        changedBy: authenticatedUser.username,
+      }));
+      return;
+    }
+
+    if (url.pathname === "/api/admin/elderly-alerts/run" && req.method === "POST") {
+      const body = await readJson(req);
+      sendJson(res, 200, await runElderlyAlertScan({
+        asOf: body.asOf,
+        source: authenticatedUser.username,
         changedBy: authenticatedUser.username,
       }));
       return;
@@ -603,6 +634,16 @@ function getAuthenticatedUser(req) {
   return type === "Bearer" ? verifySessionToken(token) : null;
 }
 
+function isValidCronRequest(req) {
+  const secret = String(process.env.CRON_SECRET || "").trim();
+  if (!secret) return false;
+  return req.headers.authorization === `Bearer ${secret}`;
+}
+
+function elderlyAlertMonthlyRunKey(date = new Date()) {
+  return `elderly-alerts-${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
 function requireAdmin(res, user, message) {
   if (user?.isAdmin) return true;
   sendJson(res, 403, { message });
@@ -621,6 +662,7 @@ function isAdminOnlyMutation(url, method) {
   return (
     (url.pathname === "/api/people" && method === "POST") ||
     (url.pathname === "/api/admin/renumber-sno" && method === "POST") ||
+    (url.pathname === "/api/admin/elderly-alerts/run" && method === "POST") ||
     (url.pathname === "/api/admin/normalize-departments" && method === "POST") ||
     (url.pathname === "/api/admin/clean-emails" && method === "POST") ||
     (url.pathname === "/api/admin/clean-placeholder-text" && method === "POST") ||
@@ -637,6 +679,9 @@ function adminOnlyMessage(url, method) {
   }
   if (url.pathname === "/api/admin/renumber-sno" && method === "POST") {
     return "Only admin users can renumber S No values.";
+  }
+  if (url.pathname === "/api/admin/elderly-alerts/run" && method === "POST") {
+    return "Only admin users can run elderly alert scans.";
   }
   if (url.pathname === "/api/admin/normalize-departments" && method === "POST") {
     return "Only admin users can normalize departments.";

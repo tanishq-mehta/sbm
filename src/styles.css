@@ -283,6 +283,126 @@ textarea[readonly] {
   font-weight: 900;
 }
 
+.alert-menu-wrapper {
+  position: relative;
+  display: inline-flex;
+}
+
+.alert-icon-button {
+  position: relative;
+  display: inline-grid;
+  width: 42px;
+  min-width: 42px;
+  height: 42px;
+  place-items: center;
+  border: 1px solid #cdd9d4;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #253a38;
+}
+
+.alert-icon-button:hover,
+.alert-icon-button:focus {
+  border-color: #9eb5ad;
+}
+
+.alert-icon-button.has-alerts {
+  border-color: #e0a7a0;
+  color: #a83629;
+}
+
+.alert-icon-button svg {
+  width: 20px;
+  height: 20px;
+}
+
+.alert-count-badge {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  display: inline-grid;
+  min-width: 21px;
+  height: 21px;
+  place-items: center;
+  border: 2px solid #ffffff;
+  border-radius: 999px;
+  background: #ba342a;
+  color: #ffffff;
+  padding: 0 5px;
+  font-size: 0.72rem;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.alert-panel {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 20;
+  width: min(380px, calc(100vw - 24px));
+  max-height: min(520px, calc(100vh - 88px));
+  border: 1px solid #dce4df;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 20px 48px rgba(34, 48, 47, 0.16);
+  overflow: hidden;
+}
+
+.alert-panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid #edf1ef;
+  padding: 13px 14px;
+}
+
+.alert-panel-note {
+  margin: 0;
+  color: #637370;
+  padding: 14px;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.alert-list {
+  display: grid;
+  max-height: 360px;
+  gap: 8px;
+  overflow: auto;
+  padding: 10px 12px 12px;
+}
+
+.alert-person-button {
+  display: grid;
+  width: 100%;
+  gap: 3px;
+  border: 1px solid #e5ece8;
+  border-radius: 6px;
+  background: #fbfdfc;
+  color: #253533;
+  padding: 10px 11px;
+  text-align: left;
+  white-space: normal;
+}
+
+.alert-person-button:hover,
+.alert-person-button:focus {
+  border-color: #9eb5ad;
+  background: #f1f7f4;
+  outline: none;
+}
+
+.alert-person-button span {
+  color: #637370;
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.alert-person-button .alert-meta {
+  color: #a83629;
+}
+
 .page-actions {
   justify-content: flex-end;
   flex-wrap: wrap;
@@ -942,6 +1062,19 @@ tbody tr:focus {
   .topbar-actions {
     justify-content: flex-start;
     flex-wrap: wrap;
+  }
+
+  .alert-menu-wrapper {
+    position: static;
+  }
+
+  .alert-panel {
+    position: fixed;
+    top: 74px;
+    right: 12px;
+    left: 12px;
+    width: auto;
+    max-height: calc(100vh - 92px);
   }
 
   .summary-total {

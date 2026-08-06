@@ -14,5 +14,11 @@
       "maxDuration": 10,
       "includeFiles": "data/**"
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/cron/elderly-alerts",
+      "schedule": "0 0 1 * *"
+    }
+  ]
 }

@@ -139,7 +139,7 @@ export default function App() {
   const canManageUsers = Boolean(user?.isAdmin);
 
   return (
-    <Shell onLogout={handleLogout} user={user}>
+    <Shell onLogout={handleLogout} user={user} token={token}>
       {route.name === "audit" ? (
         <AuditPage token={token} canManageUsers={canManageUsers} />
       ) : route.name === "data-quality-list" ? (
@@ -250,7 +250,7 @@ function ForbiddenPage() {
   );
 }
 
-function Shell({ children, onLogout, user }) {
+function Shell({ children, onLogout, user, token }) {
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -260,6 +260,7 @@ function Shell({ children, onLogout, user }) {
         </button>
         <div className="topbar-actions">
           {user?.isAdmin ? <span className="role-pill">Admin</span> : null}
+          <ElderlyAlertButton token={token} />
           <button className="secondary-button compact" onClick={() => (window.location.hash = "#/summary")}>
             Summary
           </button>
@@ -272,6 +273,144 @@ function Shell({ children, onLogout, user }) {
         </div>
       </header>
       {children}
+    </div>
+  );
+}
+
+function ElderlyAlertButton({ token }) {
+  const [open, setOpen] = useState(false);
+  const [alerts, setAlerts] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  useEffect(() => {
+    if (!token) return undefined;
+    const refresh = () => setRefreshKey((current) => current + 1);
+    window.addEventListener("focus", refresh);
+    window.addEventListener("sbm:elderly-alerts-refresh", refresh);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      window.removeEventListener("sbm:elderly-alerts-refresh", refresh);
+    };
+  }, [token]);
+
+  useEffect(() => {
+    if (!token) return undefined;
+    let cancelled = false;
+    setLoading(true);
+    setError("");
+
+    apiFetch("/api/elderly-alerts", { token })
+      .then((payload) => {
+        if (cancelled) return;
+        setAlerts(payload.results || []);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setError(err.message);
+        setAlerts([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshKey, token]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [open]);
+
+  function toggleOpen() {
+    const nextOpen = !open;
+    setOpen(nextOpen);
+    if (nextOpen) setRefreshKey((current) => current + 1);
+  }
+
+  function openPerson(alert) {
+    const currentHash = window.location.hash || "#/home";
+    const returnHash = currentHash.startsWith("#/people/") ? "#/home" : currentHash;
+    setOpen(false);
+    window.location.hash = `#/people/${alert.personId}?returnTo=${encodeURIComponent(returnHash)}`;
+  }
+
+  return (
+    <div className="alert-menu-wrapper">
+      <button
+        type="button"
+        className={`alert-icon-button ${alerts.length ? "has-alerts" : ""}`}
+        onClick={toggleOpen}
+        aria-expanded={open}
+        aria-label={`${alerts.length} elderly status alert${alerts.length === 1 ? "" : "s"}`}
+        title="Elderly status alerts"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path
+            d="M18 16v-5a6 6 0 0 0-12 0v5l-2 2h16l-2-2Z"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+          <path
+            d="M9.5 20a2.5 2.5 0 0 0 5 0"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+          />
+        </svg>
+        {alerts.length ? <span className="alert-count-badge">{alerts.length}</span> : null}
+      </button>
+
+      {open ? (
+        <section className="alert-panel" aria-label="Pending elderly status alerts">
+          <header>
+            <div>
+              <p className="eyebrow">Status alerts</p>
+              <h2>Pending elderly marks</h2>
+            </div>
+            <button
+              type="button"
+              className="secondary-button compact"
+              onClick={() => setRefreshKey((current) => current + 1)}
+              disabled={loading}
+            >
+              Refresh
+            </button>
+          </header>
+          {loading ? <p className="alert-panel-note">Loading alerts...</p> : null}
+          {error ? <p className="form-error">{error}</p> : null}
+          {!loading && !error && !alerts.length ? (
+            <p className="alert-panel-note">No pending elderly alerts.</p>
+          ) : null}
+          {alerts.length ? (
+            <div className="alert-list">
+              {alerts.map((alert) => (
+                <button
+                  type="button"
+                  key={alert.id}
+                  className="alert-person-button"
+                  onClick={() => openPerson(alert)}
+                >
+                  <strong>{alert.name}</strong>
+                  <span>{alert.badgeNo || "No badge"} · Age {alert.age ?? "-"}</span>
+                  <span className="alert-meta">Turned 70 on {formatShortDate(alert.turns70On)}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </section>
+      ) : null}
     </div>
   );
 }
@@ -1121,6 +1260,7 @@ function PersonPage({ id, token, isNew = false, canManageUsers = false, returnTo
       });
       setPerson(updated);
       setFormData(updated.data || {});
+      window.dispatchEvent(new Event("sbm:elderly-alerts-refresh"));
       window.location.hash = backTarget;
     } catch (err) {
       setError(err.message);
@@ -1649,6 +1789,18 @@ function formatIssueDetails(details = []) {
 
 function displayAuditValue(value) {
   return value === "" || value === null || value === undefined ? "(blank)" : String(value);
+}
+
+function formatShortDate(value) {
+  if (!value) return "-";
+  const date = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return new Intl.DateTimeFormat(undefined, {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(date);
 }
 
 function auditActionLabel(action) {
