@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 
 const TOKEN_KEY = "sbm-user-manager-token";
 const LEGACY_USER_KEY = "sbm-user-manager-user";
-const dateFields = ["Birth Date", "Initiation Date"];
+const dateFields = ["Birth Date", "Initiation Date", "Date of Enrollment/ Date of Badge"];
 const addressLimitFields = ["Address Line 1", "Address Line 2"];
 const PERSON_IMAGE_MAX_BYTES = 3 * 1024 * 1024;
 
@@ -12,6 +12,11 @@ const sections = [
     fields: [
       "S No",
       "Badge no.",
+      "Condition",
+      "Is Initiated",
+      "EC No.",
+      "VSS No.",
+      "Date of Enrollment/ Date of Badge",
       "First Name",
       "Middle Name",
       "Last Name",

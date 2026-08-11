@@ -35,13 +35,18 @@ const serialField = "S No";
 const badgeField = "Badge no.";
 const statusField = "Status";
 const birthDateField = "Birth Date";
+const enrollmentDateField = "Date of Enrollment/ Date of Badge";
+const conditionField = "Condition";
+const initiatedField = "Is Initiated";
 const verificationField = "Verification Status";
 const genderField = "Gender";
 const localCentreField = "Sewa Dept - Local Centre";
 const majorCentreField = "Sewa Dept - Major Centre";
 const verificationOptions = ["None", "Verification Done", "Rectification Done"];
 const statusOptions = ["PERMANENT", "OPEN", "ELDERLY", "NEW", "NI", "ESS", "VSS"];
-const dateFields = new Set([birthDateField, "Initiation Date"]);
+const conditionOptions = ["Active", "Inactive", "Cancelled"];
+const initiatedOptions = ["Yes", "No"];
+const dateFields = new Set([birthDateField, "Initiation Date", enrollmentDateField]);
 const departmentFields = new Set([localCentreField, majorCentreField]);
 const placeholderTextFields = new Set(["Profession", "Educational Qualification"]);
 const placeholderTextValues = new Set([
@@ -2079,6 +2084,7 @@ function migrateSqlite() {
   db.exec("CREATE INDEX IF NOT EXISTS idx_people_badge ON people(badge_no)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_people_phone ON people(phone_number)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_people_deleted_at ON people(deleted_at)");
+  backfillMissingDataFieldsSqlite(db);
   db.exec(`
     CREATE TABLE IF NOT EXISTS audit_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2165,6 +2171,7 @@ async function migratePostgres() {
   await pool.query("CREATE INDEX IF NOT EXISTS idx_people_phone ON people (phone_number)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_people_data ON people USING GIN (data)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_people_deleted_at ON people (deleted_at)");
+  await backfillMissingDataFieldsPostgres(pool);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS audit_logs (
       id BIGSERIAL PRIMARY KEY,
@@ -2222,6 +2229,51 @@ async function migratePostgres() {
     )
   `);
   await pool.query("CREATE INDEX IF NOT EXISTS idx_elderly_alert_runs_created_at ON elderly_alert_runs (created_at DESC)");
+}
+
+function backfillMissingDataFieldsSqlite(db) {
+  const template = emptyData();
+  const rows = db.prepare("SELECT id, data FROM people").all();
+  const updates = [];
+
+  for (const row of rows) {
+    let data;
+    try {
+      data = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+    } catch {
+      continue;
+    }
+    if (!data || fields.every((field) => Object.hasOwn(data, field))) continue;
+    updates.push({
+      id: row.id,
+      data: JSON.stringify({ ...template, ...data }),
+    });
+  }
+
+  if (!updates.length) return;
+
+  const update = db.prepare("UPDATE people SET data = ? WHERE id = ?");
+  db.exec("BEGIN");
+  try {
+    for (const row of updates) {
+      update.run(row.data, row.id);
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+async function backfillMissingDataFieldsPostgres(pool) {
+  await pool.query(
+    `
+      UPDATE people
+      SET data = $1::jsonb || data
+      WHERE NOT (data ?& $2::text[])
+    `,
+    [emptyData(), fields]
+  );
 }
 
 function seedSqlite() {
@@ -2761,6 +2813,8 @@ function normalizeFieldValue(field, value) {
   const normalized = normalizeValue(value);
   if (field === verificationField) return normalizeVerificationValue(normalized);
   if (field === statusField) return normalizeStatusValue(normalized);
+  if (field === conditionField) return normalizeOptionValue(normalized, conditionOptions);
+  if (field === initiatedField) return normalizeOptionValue(normalized, initiatedOptions);
   if (dateFields.has(field)) return normalizeDateValue(normalized);
   if (departmentFields.has(field)) return normalizeDepartmentValue(normalized);
   if (placeholderTextFields.has(field)) return sanitizePlaceholderTextValue(normalized);
@@ -2958,6 +3012,12 @@ function isPlaceholderTextValue(value) {
 function normalizeStatusValue(value) {
   const normalized = normalizeValue(value).toUpperCase();
   return statusOptions.includes(normalized) ? normalized : normalized;
+}
+
+function normalizeOptionValue(value, options) {
+  const normalized = normalizeValue(value);
+  const match = options.find((option) => option.toLowerCase() === normalized.toLowerCase());
+  return match || normalized;
 }
 
 export function normalizeVerificationValue(value) {

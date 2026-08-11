@@ -1,6 +1,11 @@
 [
   "S No",
   "Badge no.",
+  "Condition",
+  "Is Initiated",
+  "EC No.",
+  "VSS No.",
+  "Date of Enrollment/ Date of Badge",
   "First Name",
   "Middle Name",
   "Last Name",

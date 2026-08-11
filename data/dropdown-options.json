@@ -4,6 +4,15 @@
     "Verification Done",
     "Rectification Done"
   ],
+  "Condition": [
+    "Active",
+    "Inactive",
+    "Cancelled"
+  ],
+  "Is Initiated": [
+    "Yes",
+    "No"
+  ],
   "Initiation_By": [
     "Baba Gurinder Singh Ji",
     "Maharaj Charan Singh Ji",

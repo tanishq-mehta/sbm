@@ -15,6 +15,8 @@ TARGET_SHEETS = {f"team{i}" for i in range(1, 7)}
 HEADER_MARKERS = {"Badge no.", "First Name", "Mobile No"}
 VERIFICATION_OPTIONS = ["None", "Verification Done", "Rectification Done"]
 STATUS_OPTIONS = ["PERMANENT", "OPEN", "ELDERLY", "NEW", "NI", "ESS", "VSS"]
+CONDITION_OPTIONS = ["Active", "Inactive", "Cancelled"]
+INITIATED_OPTIONS = ["Yes", "No"]
 INITIATION_BY_OPTIONS = [
     "Baba Gurinder Singh Ji",
     "Maharaj Charan Singh Ji",
@@ -22,9 +24,16 @@ INITIATION_BY_OPTIONS = [
     "Maharaj Sawan Singh Ji",
     "Hazur Jasdeep Singh Ji",
 ]
-DATE_FIELDS = {"Birth Date", "Initiation Date"}
+DATE_FIELDS = {"Birth Date", "Initiation Date", "Date of Enrollment/ Date of Badge"}
 DEPARTMENT_FIELDS = {"Sewa Dept - Local Centre", "Sewa Dept - Major Centre"}
 PLACEHOLDER_TEXT_FIELDS = {"Profession", "Educational Qualification"}
+APP_MANAGED_FIELDS_AFTER_BADGE = [
+    "Condition",
+    "Is Initiated",
+    "EC No.",
+    "VSS No.",
+    "Date of Enrollment/ Date of Badge",
+]
 MONTH_NAMES = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
 
 
@@ -74,6 +83,10 @@ def normalize_field_value(field: str, value: object) -> str:
         return verification_value(value)
     if field == "Status":
         return status_value(value)
+    if field == "Condition":
+        return option_value(value, CONDITION_OPTIONS)
+    if field == "Is Initiated":
+        return option_value(value, INITIATED_OPTIONS)
     if field in DATE_FIELDS:
         return date_value(value)
     if field in DEPARTMENT_FIELDS:
@@ -82,6 +95,14 @@ def normalize_field_value(field: str, value: object) -> str:
         return email_value(normalized)
     if field in PLACEHOLDER_TEXT_FIELDS:
         return placeholder_text_value(normalized)
+    return normalized
+
+
+def option_value(value: object, options: list[str]) -> str:
+    normalized = normalize_value(value)
+    for option in options:
+        if option.lower() == normalized.lower():
+            return option
     return normalized
 
 
@@ -271,6 +292,8 @@ def dropdown_options(workbook: Path) -> dict[str, list[str]]:
         "Sewa Dept - Major Centre": departments,
         "Initiation_By": INITIATION_BY_OPTIONS,
         "Status": STATUS_OPTIONS,
+        "Condition": CONDITION_OPTIONS,
+        "Is Initiated": INITIATED_OPTIONS,
     }
 
 
@@ -301,6 +324,23 @@ def department(data: dict[str, str]) -> str:
     )
 
 
+def with_app_managed_fields(fields: list[str]) -> list[str]:
+    result: list[str] = []
+    inserted = False
+    for field in fields:
+        result.append(field)
+        if field == "Badge no.":
+            for managed_field in APP_MANAGED_FIELDS_AFTER_BADGE:
+                if managed_field not in result and managed_field not in fields:
+                    result.append(managed_field)
+            inserted = True
+    if not inserted:
+        for managed_field in APP_MANAGED_FIELDS_AFTER_BADGE:
+            if managed_field not in result:
+                result.append(managed_field)
+    return result
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Import TEAM 1..TEAM 6 sheets into seed JSON.")
     parser.add_argument("workbook", type=Path)
@@ -326,7 +366,7 @@ def main() -> None:
         frame.columns = [normalize_value(column) for column in frame.columns]
 
         if fields is None:
-            fields = list(frame.columns)
+            fields = with_app_managed_fields(list(frame.columns))
 
         for _, row in frame.iterrows():
             data = {field: normalize_field_value(field, row.get(field, "")) for field in fields}
