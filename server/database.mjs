@@ -85,6 +85,10 @@ const dataQualityIssueTypes = [
   { key: "mismatch", label: "Mismatching" },
   { key: "blank", label: "Blank" },
 ];
+const notAttendedBadgeGroups = [
+  { key: "EC", label: "Open sewadars", prefix: "EC" },
+  { key: "PR", label: "Permanent sewadars", prefix: "PR" },
+];
 const dataQualityFields = [
   {
     key: "skills",
@@ -952,12 +956,14 @@ export async function getVerificationSummary({ department = "" } = {}) {
   const filtered = normalizedDepartment
     ? people.filter((person) => normalizeSearch(person.department) === normalizedDepartment)
     : people;
+  const counts = countStatuses(filtered);
 
   return {
     department: department || "",
     departments,
     total: filtered.length,
-    counts: countStatuses(filtered),
+    counts,
+    notAttendedGroups: notAttendedSummaryGroups(counts),
     byDepartment: departments.map((entry) => {
       const departmentPeople = people.filter((person) => person.department === entry.department);
       return {
@@ -967,6 +973,33 @@ export async function getVerificationSummary({ department = "" } = {}) {
         counts: countStatuses(departmentPeople),
       };
     }),
+  };
+}
+
+export async function listVerificationPeople({ status = "", badgePrefix = "", department = "" } = {}) {
+  await initializeDatabase();
+  const statusDefinition = verificationStatusListDefinition(status);
+  const badgeGroup = notAttendedBadgeGroups.find((group) => group.key === normalizeValue(badgePrefix).toUpperCase());
+  const normalizedDepartment = normalizeSearch(department);
+
+  if (!statusDefinition) throw statusError(400, "Unknown verification status list.");
+  if (!badgeGroup) throw statusError(400, "Unknown badge prefix group.");
+
+  const results = (await getAllPersonRows())
+    .map(rowToPerson)
+    .filter((person) => !normalizedDepartment || normalizeSearch(person.department) === normalizedDepartment)
+    .filter((person) => verificationStatusKey(person) === statusDefinition.key)
+    .filter((person) => badgePrefixForPerson(person) === badgeGroup.key)
+    .map(toVerificationListSummary)
+    .sort(compareVerificationPeople);
+
+  return {
+    status: statusDefinition,
+    badgeGroup,
+    department: department || "",
+    departmentLabel: department || "All departments",
+    total: results.length,
+    results,
   };
 }
 
@@ -3452,8 +3485,19 @@ function dataQualityGroupForPerson(person) {
   return dataQualityGroupForStatus(normalizeVerificationValue(person.data?.[verificationField]));
 }
 
+function personBadgeNo(person) {
+  return normalizeValue(person.data?.[badgeField] || person.badgeNo);
+}
+
+function badgePrefixForPerson(person) {
+  const badge = personBadgeNo(person).toUpperCase();
+  if (badge.startsWith("EC")) return "EC";
+  if (badge.startsWith("PR")) return "PR";
+  return "other";
+}
+
 function isPrBadgePerson(person) {
-  return normalizeValue(person.data?.[badgeField] || person.badgeNo).toUpperCase().startsWith("PR");
+  return badgePrefixForPerson(person) === "PR";
 }
 
 function isElderlyStatusPerson(person) {
@@ -3575,6 +3619,49 @@ function compareDataQualityPeople(a, b) {
   });
 }
 
+function compareVerificationPeople(a, b) {
+  const badgeCompare = normalizeValue(a.badgeNo).localeCompare(normalizeValue(b.badgeNo), "en", {
+    numeric: true,
+    sensitivity: "base",
+  });
+  if (badgeCompare !== 0) return badgeCompare;
+
+  return normalizeValue(a.name).localeCompare(normalizeValue(b.name), "en", {
+    numeric: true,
+    sensitivity: "base",
+  });
+}
+
+function verificationStatusListDefinition(status) {
+  const normalized = normalizeValue(status || "notAttended");
+  if (!normalized || normalized === "notAttended") {
+    return { key: "notAttended", label: "Not attended" };
+  }
+  return null;
+}
+
+function verificationStatusKey(person) {
+  const status = normalizeVerificationValue(person.data?.[verificationField]);
+  if (status === "Rectification Done") return "rectified";
+  if (status === "Verification Done") return "attended";
+  return "notAttended";
+}
+
+function toVerificationListSummary(person) {
+  return {
+    ...toSummary(person),
+    badgeNo: personBadgeNo(person),
+    verificationStatus: normalizeVerificationValue(person.data?.[verificationField]),
+  };
+}
+
+function notAttendedSummaryGroups(counts) {
+  return notAttendedBadgeGroups.map((group) => ({
+    ...group,
+    count: counts.notAttendedByBadgePrefix?.[group.key] || 0,
+  }));
+}
+
 function normalizeSearch(value) {
   return String(value || "").trim().toLowerCase();
 }
@@ -3653,6 +3740,11 @@ function countStatuses(people) {
     attended: 0,
     rectified: 0,
     notAttended: 0,
+    notAttendedByBadgePrefix: {
+      EC: 0,
+      PR: 0,
+      other: 0,
+    },
   };
 
   for (const person of people) {
@@ -3664,6 +3756,8 @@ function countStatuses(people) {
       counts.attended += 1;
     } else {
       counts.notAttended += 1;
+      const badgePrefix = badgePrefixForPerson(person);
+      counts.notAttendedByBadgePrefix[badgePrefix] += 1;
     }
   }
 

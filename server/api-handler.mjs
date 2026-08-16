@@ -14,6 +14,7 @@ import {
   getVerificationSummary,
   importStatusValues,
   initializeDatabase,
+  listVerificationPeople,
   listAuditLogs,
   listAllAuditLogs,
   listElderlyAlerts,
@@ -233,6 +234,15 @@ export async function handleApiRequest(req, res) {
     if (url.pathname === "/api/summary" && req.method === "GET") {
       const department = url.searchParams.get("department") || "";
       sendJson(res, 200, await getVerificationSummary({ department }));
+      return;
+    }
+
+    if (url.pathname === "/api/summary/verification/people" && req.method === "GET") {
+      sendJson(res, 200, await listVerificationPeople({
+        status: url.searchParams.get("status") || "",
+        badgePrefix: url.searchParams.get("badgePrefix") || "",
+        department: url.searchParams.get("department") || "",
+      }));
       return;
     }
 

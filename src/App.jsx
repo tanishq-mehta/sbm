@@ -147,12 +147,15 @@ export default function App() {
     <Shell onLogout={handleLogout} user={user} token={token}>
       {route.name === "audit" ? (
         <AuditPage token={token} canManageUsers={canManageUsers} />
+      ) : route.name === "verification-list" ? (
+        <VerificationListPage token={token} route={route} />
       ) : route.name === "data-quality-list" ? (
         <DataQualityListPage token={token} route={route} />
       ) : route.name === "summary" ? (
         <SummaryPage
           token={token}
           initialTab={route.tab}
+          initialDepartment={route.department}
           initialMajorCentreOnlyNonElderly={route.onlyNonElderly}
         />
       ) : route.name === "new-person" ? (
@@ -745,7 +748,12 @@ function AuditPage({ token, canManageUsers }) {
   );
 }
 
-function SummaryPage({ token, initialTab = "verification", initialMajorCentreOnlyNonElderly = false }) {
+function SummaryPage({
+  token,
+  initialTab = "verification",
+  initialDepartment = "",
+  initialMajorCentreOnlyNonElderly = false,
+}) {
   const [activeTab, setActiveTab] = useState(initialTab === "dataQuality" ? "dataQuality" : "verification");
 
   return (
@@ -782,7 +790,7 @@ function SummaryPage({ token, initialTab = "verification", initialMajorCentreOnl
       </div>
 
       {activeTab === "verification" ? (
-        <VerificationSummaryTab token={token} />
+        <VerificationSummaryTab token={token} initialDepartment={initialDepartment} />
       ) : (
         <DataQualitySummaryTab
           token={token}
@@ -793,11 +801,15 @@ function SummaryPage({ token, initialTab = "verification", initialMajorCentreOnl
   );
 }
 
-function VerificationSummaryTab({ token }) {
-  const [department, setDepartment] = useState("");
+function VerificationSummaryTab({ token, initialDepartment = "" }) {
+  const [department, setDepartment] = useState(initialDepartment || "");
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    setDepartment(initialDepartment || "");
+  }, [initialDepartment]);
 
   useEffect(() => {
     let cancelled = false;
@@ -821,6 +833,7 @@ function VerificationSummaryTab({ token }) {
   }, [department, token]);
 
   const rows = summary ? statusRows(summary.counts) : [];
+  const notAttendedGroups = summary?.notAttendedGroups || [];
 
   return (
     <>
@@ -855,6 +868,27 @@ function VerificationSummaryTab({ token }) {
                 <strong>{row.value}</strong>
               </div>
             ))}
+          </section>
+
+          <section className="summary-drilldown-panel">
+            <div className="results-header">
+              <h2>Not attended sewadars</h2>
+              <span>{department ? "Filtered by department" : "All departments"}</span>
+            </div>
+            <div className="not-attended-grid">
+              {notAttendedGroups.map((group) => (
+                <button
+                  type="button"
+                  className="not-attended-card"
+                  key={group.key}
+                  onClick={() => openVerificationList("notAttended", group.key, department)}
+                >
+                  <span>{group.label}</span>
+                  <strong>{group.count}</strong>
+                  <small>Badge starts with {group.prefix}</small>
+                </button>
+              ))}
+            </div>
           </section>
 
           <section className="chart-panel">
@@ -1007,6 +1041,107 @@ function DataQualitySummaryTab({ token, initialMajorCentreOnlyNonElderly = false
         </section>
       ) : null}
     </>
+  );
+}
+
+function VerificationListPage({ token, route }) {
+  const [payload, setPayload] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError("");
+    const params = new URLSearchParams({
+      status: route.status || "notAttended",
+      badgePrefix: route.badgePrefix || "",
+      department: route.department || "",
+    });
+    apiFetch(`/api/summary/verification/people?${params.toString()}`, { token })
+      .then((nextPayload) => {
+        if (!cancelled) setPayload(nextPayload);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [route.badgePrefix, route.department, route.status, token]);
+
+  const title = payload
+    ? `${payload.status.label} ${payload.badgeGroup.label}`
+    : "Verification list";
+  const currentHash = window.location.hash || "#/summary/verification";
+  const backParams = new URLSearchParams();
+  if (route.department) backParams.set("department", route.department);
+  const backHash = `#/summary${backParams.toString() ? `?${backParams.toString()}` : ""}`;
+  const subtitle = payload?.department ? `Department: ${payload.departmentLabel}` : "All departments";
+
+  return (
+    <main className="page">
+      <section className="page-heading">
+        <div>
+          <p className="eyebrow">Verification drilldown</p>
+          <h1>{title}</h1>
+          <p className="page-subtitle">{subtitle}</p>
+        </div>
+        <button className="secondary-button" onClick={() => (window.location.hash = backHash)}>
+          Back to summary
+        </button>
+      </section>
+
+      {error ? <p className="form-error wide">{error}</p> : null}
+      {loading ? <p className="empty-state">Loading people...</p> : null}
+
+      {payload && !loading ? (
+        <section className="results-panel">
+          <div className="results-header">
+            <h2>Sewadars</h2>
+            <span>{payload.total} sewadar{payload.total === 1 ? "" : "s"}</span>
+          </div>
+          {payload.results.length ? (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Badge number</th>
+                    <th>Verification</th>
+                    <th>Department</th>
+                    <th>Phone number</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {payload.results.map((person) => (
+                    <tr
+                      key={person.id}
+                      tabIndex={0}
+                      onClick={() => openPersonFromVerificationList(person.id, currentHash)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") openPersonFromVerificationList(person.id, currentHash);
+                      }}
+                    >
+                      <td><strong>{person.name}</strong></td>
+                      <td>{person.badgeNo || "-"}</td>
+                      <td>{person.verificationStatus || "-"}</td>
+                      <td>{person.department || "-"}</td>
+                      <td>{person.phoneNumber || "-"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="empty-state">No sewadars currently match this group.</p>
+          )}
+        </section>
+      ) : null}
+    </main>
   );
 }
 
@@ -1630,6 +1765,14 @@ function readRoute() {
   const personMatch = path.match(/^#\/people\/(\d+)$/);
   if (personMatch) return { name: "person", id: personMatch[1], returnTo };
   if (path === "#/audit") return { name: "audit" };
+  if (path === "#/summary/verification") {
+    return {
+      name: "verification-list",
+      status: params.get("status") || "notAttended",
+      badgePrefix: params.get("badgePrefix") || "",
+      department: params.get("department") || "",
+    };
+  }
   if (path === "#/summary/data-quality") {
     return {
       name: "data-quality-list",
@@ -1643,6 +1786,7 @@ function readRoute() {
     return {
       name: "summary",
       tab: params.get("tab") || "",
+      department: params.get("department") || "",
       onlyNonElderly: isTruthyParam(params.get("onlyNonElderly")),
     };
   }
@@ -1662,6 +1806,16 @@ function openDataQualityList(field, issue, group, onlyNonElderly = false) {
   const params = new URLSearchParams({ field, issue, group });
   if (onlyNonElderly) params.set("onlyNonElderly", "1");
   window.location.hash = `#/summary/data-quality?${params.toString()}`;
+}
+
+function openVerificationList(status, badgePrefix, department = "") {
+  const params = new URLSearchParams({ status, badgePrefix });
+  if (department) params.set("department", department);
+  window.location.hash = `#/summary/verification?${params.toString()}`;
+}
+
+function openPersonFromVerificationList(id, returnHash) {
+  window.location.hash = `#/people/${id}?returnTo=${encodeURIComponent(returnHash)}`;
 }
 
 function openPersonFromDataQuality(id, returnHash) {

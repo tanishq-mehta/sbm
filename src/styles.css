@@ -656,6 +656,57 @@ tbody tr:focus {
   background: #9aa8a4;
 }
 
+.summary-drilldown-panel {
+  margin-top: 20px;
+  border: 1px solid #dce4df;
+  border-radius: 8px;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.not-attended-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 16px;
+}
+
+.not-attended-card {
+  display: grid;
+  gap: 6px;
+  min-height: 116px;
+  border: 1px solid #dce4df;
+  border-radius: 8px;
+  background: #f8fbf9;
+  padding: 16px;
+  color: #172826;
+  text-align: left;
+  cursor: pointer;
+}
+
+.not-attended-card:hover,
+.not-attended-card:focus {
+  border-color: #23755e;
+  background: #f1f7f4;
+  outline: none;
+}
+
+.not-attended-card span {
+  color: #526360;
+  font-weight: 900;
+}
+
+.not-attended-card strong {
+  color: #173f3b;
+  font-size: 2rem;
+  line-height: 1;
+}
+
+.not-attended-card small {
+  color: #637370;
+  font-weight: 800;
+}
+
 .chart-panel {
   margin-top: 20px;
   border: 1px solid #dce4df;
@@ -1119,6 +1170,10 @@ tbody tr:focus {
   .bar-row {
     grid-template-columns: 1fr;
     gap: 6px;
+  }
+
+  .not-attended-grid {
+    grid-template-columns: 1fr;
   }
 
   .audit-entry-header,
