@@ -167,6 +167,32 @@ textarea[readonly] {
   gap: 8px;
 }
 
+.condition-control input,
+.condition-control select {
+  font-weight: 900;
+}
+
+.condition-active input,
+.condition-active select {
+  border-color: #7db79f;
+  background: #edf9f3;
+  color: #1c604d;
+}
+
+.condition-inactive input,
+.condition-inactive select {
+  border-color: #dec56f;
+  background: #fff7d8;
+  color: #735d09;
+}
+
+.condition-cancelled input,
+.condition-cancelled select {
+  border-color: #e3a29b;
+  background: #fff0ed;
+  color: #a83629;
+}
+
 .primary-button,
 .secondary-button,
 .danger-button {

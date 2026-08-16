@@ -995,7 +995,7 @@ function DataQualitySummaryTab({ token, initialMajorCentreOnlyNonElderly = false
                         )}
                         disabled={!field.groups?.[group.key]?.[issue]}
                       >
-                        <span>{issue === "mismatch" ? "Mismatching" : "Blank"}</span>
+                        <span>{dataQualityIssueLabel(field.key, issue)}</span>
                         <strong>{field.groups?.[group.key]?.[issue] || 0}</strong>
                       </button>
                     ))}
@@ -1476,13 +1476,18 @@ function FieldControl({ field, value, options = [], readOnly = false, placeholde
   const isDateField = dateFields.includes(field);
   const maxLength = addressLimitFields.includes(field) ? 75 : undefined;
   const type = inputType(field);
+  const conditionTone = field === "Condition" ? conditionToneClass(value) : "";
+  const labelClass = [multiline ? "span-2" : "", conditionTone ? "condition-field" : ""]
+    .filter(Boolean)
+    .join(" ");
+  const controlToneClass = conditionTone ? `condition-control ${conditionTone}` : "";
   const selectOptions = useMemo(() => {
     if (!options.length) return [];
     return [...new Set(options.filter(Boolean))];
   }, [options, value]);
 
   return (
-    <label className={multiline ? "span-2" : ""}>
+    <label className={labelClass}>
       <span>{field}</span>
       {readOnly ? (
         <input
@@ -1507,7 +1512,7 @@ function FieldControl({ field, value, options = [], readOnly = false, placeholde
           />
         </div>
       ) : selectOptions.length ? (
-        <div className="combo-field">
+        <div className={`combo-field ${controlToneClass}`}>
           <input
             type={type}
             value={value}
@@ -1689,6 +1694,14 @@ function fieldOptions(field, dropdownOptions, locationOptions) {
   return dropdownOptions[field] || [];
 }
 
+function conditionToneClass(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "active") return "condition-active";
+  if (normalized === "inactive") return "condition-inactive";
+  if (normalized === "cancelled" || normalized === "canceled") return "condition-cancelled";
+  return "";
+}
+
 function inputType(field) {
   if (/email/i.test(field)) return "email";
   if (/mobile|phone|contact|aadhaar|pin code/i.test(field)) return "tel";
@@ -1783,6 +1796,11 @@ function barPercent(value, rows) {
 
 function dataQualityFieldTotal(field) {
   return (field.totals?.mismatch || 0) + (field.totals?.blank || 0);
+}
+
+function dataQualityIssueLabel(fieldKey, issue) {
+  if (fieldKey === "photo" && issue === "blank") return "Missing";
+  return issue === "mismatch" ? "Mismatching" : "Blank";
 }
 
 function formatIssueDetails(details = []) {

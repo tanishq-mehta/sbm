@@ -46,6 +46,7 @@ const verificationOptions = ["None", "Verification Done", "Rectification Done"];
 const statusOptions = ["PERMANENT", "OPEN", "ELDERLY", "NEW", "NI", "ESS", "VSS"];
 const conditionOptions = ["Active", "Inactive", "Cancelled"];
 const initiatedOptions = ["Yes", "No"];
+const elderlyAlertResolvedStatuses = new Set(["ELDERLY", "ESS"]);
 const dateFields = new Set([birthDateField, "Initiation Date", enrollmentDateField]);
 const departmentFields = new Set([localCentreField, majorCentreField]);
 const placeholderTextFields = new Set(["Profession", "Educational Qualification"]);
@@ -105,6 +106,11 @@ const dataQualityFields = [
     key: "majorCentre",
     label: "Major Centre",
     fields: ["Sewa Dept - Major Centre"],
+  },
+  {
+    key: "photo",
+    label: "Photo",
+    fields: ["Photo"],
   },
   {
     key: "state",
@@ -901,7 +907,7 @@ export async function listElderlyAlerts() {
 
   const results = rows
     .map(rowToElderlyAlert)
-    .filter((alert) => alert && alert.status !== "ELDERLY");
+    .filter((alert) => alert && !isElderlyAlertResolvedStatus(alert.status));
 
   return {
     total: results.length,
@@ -971,6 +977,9 @@ export async function getDataQualitySummary(options = {}) {
   const fieldsSummary = dataQualityFields.map(emptyDataQualityFieldSummary);
   const fieldsByKey = new Map(fieldsSummary.map((field) => [field.key, field]));
   const optionSets = dataQualityOptionSets();
+  const context = {
+    photoPersonIds: await personImagePersonIds(),
+  };
 
   for (const person of people) {
     const group = dataQualityGroupForPerson(person);
@@ -981,7 +990,12 @@ export async function getDataQualitySummary(options = {}) {
         continue;
       }
 
-      const details = dataQualityDetailsForField(person, definition, optionSets.get(definition.key) || new Set());
+      const details = dataQualityDetailsForField(
+        person,
+        definition,
+        optionSets.get(definition.key) || new Set(),
+        context
+      );
       if (!details.issueType) continue;
 
       const fieldSummary = fieldsByKey.get(definition.key);
@@ -1014,6 +1028,9 @@ export async function listDataQualityPeople({ field, issue, group, onlyNonElderl
 
   const people = (await getAllPersonRows()).map(rowToPerson).filter(isPrBadgePerson);
   const validOptions = dataQualityOptionSets().get(fieldDefinition.key) || new Set();
+  const context = {
+    photoPersonIds: fieldDefinition.key === "photo" ? await personImagePersonIds() : new Set(),
+  };
   const results = [];
 
   for (const person of people) {
@@ -1022,7 +1039,7 @@ export async function listDataQualityPeople({ field, issue, group, onlyNonElderl
     const personGroup = dataQualityGroupForPerson(person);
     if (personGroup?.key !== groupDefinition.key) continue;
 
-    const details = dataQualityDetailsForField(person, fieldDefinition, validOptions);
+    const details = dataQualityDetailsForField(person, fieldDefinition, validOptions, context);
     if (details.issueType !== issueType.key) continue;
 
     results.push({
@@ -1036,7 +1053,7 @@ export async function listDataQualityPeople({ field, issue, group, onlyNonElderl
 
   return {
     field: { key: fieldDefinition.key, label: fieldDefinition.label },
-    issue: issueType,
+    issue: dataQualityIssuePayload(fieldDefinition, issueType),
     group: { key: groupDefinition.key, label: groupDefinition.label },
     filters: {
       onlyNonElderly: applyNonElderlyFilter,
@@ -1516,7 +1533,7 @@ function buildElderlyAlertScanPlan(people, asOfParts, pendingBefore) {
   for (const person of people) {
     const data = person.data || {};
     const status = normalizeStatusValue(data[statusField]);
-    if (status === "ELDERLY") {
+    if (isElderlyAlertResolvedStatus(status)) {
       plan.skippedElderly += 1;
       continue;
     }
@@ -1560,6 +1577,20 @@ async function pendingElderlyAlertPersonIds() {
   return new Set(
     getSqlite()
       .prepare("SELECT person_id FROM elderly_alerts WHERE resolved_at IS NULL")
+      .all()
+      .map((row) => Number(row.person_id))
+  );
+}
+
+async function personImagePersonIds() {
+  if (databaseProvider === "postgres") {
+    const { rows } = await getPool().query("SELECT person_id FROM person_images");
+    return new Set(rows.map((row) => Number(row.person_id)));
+  }
+
+  return new Set(
+    getSqlite()
+      .prepare("SELECT person_id FROM person_images")
       .all()
       .map((row) => Number(row.person_id))
   );
@@ -1669,8 +1700,8 @@ async function pendingElderlyAlertCountPostgres(client) {
     INNER JOIN people AS p ON p.id = ea.person_id
     WHERE ea.resolved_at IS NULL
       AND p.deleted_at IS NULL
-      AND upper(coalesce(p.data->>$1, '')) <> 'ELDERLY'
-  `, [statusField]);
+      AND NOT (upper(coalesce(p.data->>$1, '')) = ANY($2::text[]))
+  `, [statusField, [...elderlyAlertResolvedStatuses]]);
   return rows[0]?.total || 0;
 }
 
@@ -1684,7 +1715,7 @@ function pendingElderlyAlertCountSqlite(db) {
         AND p.deleted_at IS NULL
     `)
     .all();
-  return rows.filter((row) => normalizeStatusValue(JSON.parse(row.data)?.[statusField]) !== "ELDERLY").length;
+  return rows.filter((row) => !isElderlyAlertResolvedStatus(JSON.parse(row.data)?.[statusField])).length;
 }
 
 function elderlyAlertScanSummary({
@@ -1770,7 +1801,7 @@ export async function updatePerson(id, incomingData, options = {}) {
         `,
         [Number(id), summary.fullName, summary.badgeNo, changedBy, change]
       );
-      if (normalizeStatusValue(data[statusField]) === "ELDERLY") {
+      if (isElderlyAlertResolvedStatus(data[statusField])) {
         await resolveElderlyAlertForPerson(client, id);
       }
       await client.query("COMMIT");
@@ -1809,7 +1840,7 @@ export async function updatePerson(id, incomingData, options = {}) {
           VALUES (?, ?, ?, ?, 'update', ?)
         `)
         .run(Number(id), summary.fullName, summary.badgeNo, changedBy, JSON.stringify(change));
-      if (normalizeStatusValue(data[statusField]) === "ELDERLY") {
+      if (isElderlyAlertResolvedStatus(data[statusField])) {
         await resolveElderlyAlertForPerson(db, id);
       }
       db.exec("COMMIT");
@@ -3389,11 +3420,38 @@ function isElderlyStatusPerson(person) {
   return normalizeStatusValue(person.data?.[statusField]) === "ELDERLY";
 }
 
+function isElderlyAlertResolvedStatus(value) {
+  return elderlyAlertResolvedStatuses.has(normalizeStatusValue(value));
+}
+
 function dataQualityGroupForStatus(status) {
   return dataQualityGroupByStatus.get(status) || null;
 }
 
-function dataQualityDetailsForField(person, definition, validOptions) {
+function dataQualityIssuePayload(fieldDefinition, issueType) {
+  if (fieldDefinition.key === "photo" && issueType.key === "blank") {
+    return { ...issueType, label: "Missing" };
+  }
+  return issueType;
+}
+
+function dataQualityDetailsForField(person, definition, validOptions, context = {}) {
+  if (definition.key === "photo") {
+    if (context.photoPersonIds?.has(Number(person.id))) {
+      return { issueType: "", rows: [] };
+    }
+    return {
+      issueType: "blank",
+      rows: [
+        {
+          field: "Photo",
+          value: "",
+          issue: "blank",
+        },
+      ],
+    };
+  }
+
   const values = definition.fields.map((field) => ({
     field,
     value: normalizeValue(person.data?.[field]),
