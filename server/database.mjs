@@ -1104,6 +1104,7 @@ export async function createPerson(incomingData, options = {}) {
       await client.query("BEGIN");
       await client.query("SELECT pg_advisory_xact_lock($1)", [591447517]);
       const incoming = cleanData(incomingData || {});
+      await assertBadgeNumberAvailablePostgres(client, incoming[badgeField]);
       const serialNo = await nextSerialNumberPostgres(client, incoming[badgeField]);
       const data = cleanData({ ...incoming, [serialField]: serialNo });
       const summary = summarize(data);
@@ -1151,6 +1152,7 @@ export async function createPerson(incomingData, options = {}) {
   db.exec("BEGIN IMMEDIATE");
   try {
     const incoming = cleanData(incomingData || {});
+    assertBadgeNumberAvailableSqlite(db, incoming[badgeField]);
     const serialNo = nextSerialNumberSqlite(db, incoming[badgeField]);
     const data = cleanData({ ...incoming, [serialField]: serialNo });
     const summary = summarize(data);
@@ -3126,6 +3128,44 @@ function nextSerialNumberSqlite(db, badgeNo) {
     if (serialNumber) maxSerial = Math.max(maxSerial, serialNumber);
   }
   return serialForBadgeGroup(group, Math.max(maxSerial, total) + 1);
+}
+
+async function assertBadgeNumberAvailablePostgres(client, badgeNo) {
+  const normalizedBadge = normalizeValue(badgeNo);
+  if (!normalizedBadge) return;
+
+  const { rows } = await client.query(
+    `
+      SELECT id
+      FROM people
+      WHERE deleted_at IS NULL
+        AND (
+          lower(trim(coalesce(badge_no, ''))) = lower(trim($1))
+          OR lower(trim(coalesce(data->>$2, ''))) = lower(trim($1))
+        )
+      LIMIT 1
+    `,
+    [normalizedBadge, badgeField]
+  );
+  if (rows.length) {
+    throw statusError(409, "Badge number already exists.");
+  }
+}
+
+function assertBadgeNumberAvailableSqlite(db, badgeNo) {
+  const normalizedBadge = normalizeValue(badgeNo).toLowerCase();
+  if (!normalizedBadge) return;
+
+  const rows = db
+    .prepare("SELECT id, badge_no, data FROM people WHERE deleted_at IS NULL")
+    .all();
+  for (const row of rows) {
+    const data = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+    const existingBadge = normalizeValue(row.badge_no || data?.[badgeField]).toLowerCase();
+    if (existingBadge === normalizedBadge) {
+      throw statusError(409, "Badge number already exists.");
+    }
+  }
 }
 
 function buildSerialAssignments(people) {
