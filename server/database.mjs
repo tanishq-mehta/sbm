@@ -40,6 +40,7 @@ const conditionField = "Condition";
 const initiatedField = "Is Initiated";
 const verificationField = "Verification Status";
 const genderField = "Gender";
+const fatherNameField = "Father Name";
 const localCentreField = "Sewa Dept - Local Centre";
 const majorCentreField = "Sewa Dept - Major Centre";
 const verificationOptions = ["None", "Verification Done", "Rectification Done"];
@@ -47,6 +48,7 @@ const statusOptions = ["PERMANENT", "OPEN", "ELDERLY", "NEW", "NI", "ESS", "VSS"
 const conditionOptions = ["Active", "Inactive", "Cancelled"];
 const initiatedOptions = ["Yes", "No"];
 const elderlyAlertResolvedStatuses = new Set(["ELDERLY", "ESS"]);
+const fatherNameNoiseWords = new Set(["DR", "LATE", "LT", "MISS", "MR", "MRS", "MS", "SH", "SHRI", "SMT", "SR"]);
 const dateFields = new Set([birthDateField, "Initiation Date", enrollmentDateField]);
 const departmentFields = new Set([localCentreField, majorCentreField]);
 const placeholderTextFields = new Set(["Profession", "Educational Qualification"]);
@@ -325,6 +327,78 @@ export async function cleanEmailValues(options = {}) {
     throw error;
   }
   return emailCleanupResult(updates.length, selectedUpdates.length, options.returnSummary);
+}
+
+export async function normalizePersonCoreFields(options = {}) {
+  await initializeDatabase({ seedIfEmpty: false });
+  const changedBy = normalizeChangedBy(options.changedBy || "system-person-core-normalization");
+  const requestedBatchSize = Number(options.batchSize);
+  const dryRun = Boolean(options.dryRun);
+  const people = (await getAllPersonRows()).map(rowToPerson);
+  const updates = personCoreFieldUpdates(people);
+  const selectedUpdates = personCoreFieldBatch(updates, requestedBatchSize);
+
+  if (dryRun) {
+    return personCoreFieldCleanupResult(updates, 0, options.returnSummary);
+  }
+
+  if (databaseProvider === "postgres" && selectedUpdates.length) {
+    const client = await getPool().connect();
+    try {
+      await client.query("BEGIN");
+      await applyPersonUpdateBatchPostgres(client, selectedUpdates, changedBy);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  } else if (selectedUpdates.length) {
+    const db = getSqlite();
+    const updatePersonRecord = db.prepare(`
+      UPDATE people
+      SET full_name = ?,
+          badge_no = ?,
+          department = ?,
+          phone_number = ?,
+          data = ?,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+        AND deleted_at IS NULL
+    `);
+    const insertAudit = db.prepare(`
+      INSERT INTO audit_logs (person_id, name, badge_no, changed_by, action, "change")
+      VALUES (?, ?, ?, ?, 'update', ?)
+    `);
+
+    db.exec("BEGIN");
+    try {
+      for (const update of selectedUpdates) {
+        updatePersonRecord.run(
+          update.summary.fullName,
+          update.summary.badgeNo,
+          update.summary.department,
+          update.summary.phoneNumber,
+          JSON.stringify(update.data),
+          update.person.id
+        );
+        insertAudit.run(
+          update.person.id,
+          update.summary.fullName,
+          update.summary.badgeNo,
+          changedBy,
+          JSON.stringify(update.change)
+        );
+      }
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  return personCoreFieldCleanupResult(updates, selectedUpdates.length, options.returnSummary);
 }
 
 export async function cleanPlaceholderTextValues(options = {}) {
@@ -946,6 +1020,16 @@ export function getLocationOptions({ state = "", district = "" } = {}) {
     selectedState,
     selectedDistrict,
   };
+}
+
+export function isSbmExportExcludedPerson(person, asOf = new Date()) {
+  const data = person.data || {};
+  if (normalizeStatusValue(data[statusField]) === "ELDERLY") return true;
+
+  const birthParts = parseDateParts(data[birthDateField]);
+  if (!birthParts) return false;
+
+  return ageOnDate(birthParts, datePartsFromDate(asOf)) >= 70;
 }
 
 export async function getVerificationSummary({ department = "" } = {}) {
@@ -2645,6 +2729,49 @@ function majorCentreMappingResult(plan, updated, { returnSummary = false, prOnly
   };
 }
 
+function personCoreFieldUpdates(people) {
+  return people.map((person) => {
+    const originalData = person.data || {};
+    const data = normalizedPersonCoreData(originalData);
+    const change = diffData(originalData, data);
+    return {
+      person,
+      data,
+      summary: summarize(data),
+      change,
+    };
+  }).filter((update) => Object.keys(update.change).length > 0);
+}
+
+function normalizedPersonCoreData(data) {
+  return {
+    ...data,
+    [genderField]: normalizeGenderValue(data?.[genderField]),
+    [fatherNameField]: normalizeFatherNameValue(data?.[fatherNameField]),
+  };
+}
+
+function personCoreFieldBatch(updates, requestedBatchSize) {
+  if (!Number.isFinite(requestedBatchSize) || requestedBatchSize <= 0) return updates;
+  return updates.slice(0, Math.min(Math.floor(requestedBatchSize), 500));
+}
+
+function personCoreFieldCleanupResult(updates, updated, returnSummary = false) {
+  if (!returnSummary) return updated;
+  return {
+    peopleToUpdate: updates.length,
+    updated,
+    remaining: Math.max(0, updates.length - updated),
+    fieldChanges: countBy(updates.flatMap((entry) => Object.keys(entry.change))),
+    preview: updates.slice(0, 25).map((entry) => ({
+      id: entry.person.id,
+      badgeNo: entry.summary.badgeNo,
+      name: entry.summary.fullName,
+      changes: entry.change,
+    })),
+  };
+}
+
 function countBy(values) {
   return values.reduce((counts, value) => {
     counts[value] = (counts[value] || 0) + 1;
@@ -2684,9 +2811,9 @@ function majorCentreForDepartment(department, gender) {
   const key = majorCentreDepartmentKey(department);
   if (!key || blankMajorCentreDepartmentKeys.has(key)) return "";
   if (key === "HORTICULTURE") {
-    const normalizedGender = normalizeValue(gender).toUpperCase();
-    if (normalizedGender === "FEMALE") return "SEWA COLLECTION";
-    if (normalizedGender === "MALE") return "SECURITY";
+    const normalizedGender = normalizeGenderValue(gender);
+    if (normalizedGender === "F") return "SEWA COLLECTION";
+    if (normalizedGender === "M") return "SECURITY";
     return "";
   }
   return directMajorCentreDepartmentMappings.get(key) || "";
@@ -2879,6 +3006,8 @@ function normalizeFieldValue(field, value) {
   const normalized = normalizeValue(value);
   if (field === verificationField) return normalizeVerificationValue(normalized);
   if (field === statusField) return normalizeStatusValue(normalized);
+  if (field === genderField) return normalizeGenderValue(normalized);
+  if (field === fatherNameField) return normalizeFatherNameValue(normalized);
   if (field === conditionField) return normalizeOptionValue(normalized, conditionOptions);
   if (field === initiatedField) return normalizeOptionValue(normalized, initiatedOptions);
   if (dateFields.has(field)) return normalizeDateValue(normalized);
@@ -3078,6 +3207,30 @@ function isPlaceholderTextValue(value) {
 function normalizeStatusValue(value) {
   const normalized = normalizeValue(value).toUpperCase();
   return statusOptions.includes(normalized) ? normalized : normalized;
+}
+
+export function normalizeGenderValue(value) {
+  const normalized = normalizeValue(value);
+  const comparable = normalized.toUpperCase();
+  if (comparable === "MALE" || comparable === "M") return "M";
+  if (comparable === "FEMALE" || comparable === "F") return "F";
+  return normalized;
+}
+
+export function normalizeFatherNameValue(value) {
+  const normalized = normalizeValue(value);
+  if (!normalized) return "";
+
+  return normalized
+    .replace(/\b[CDSW]\s*\/\s*O\b/gi, " ")
+    .replace(/[()[\]{}]/g, " ")
+    .replace(/[,\-/]+/g, " ")
+    .split(/\s+/)
+    .map((word) => word.replace(/^\.+|\.+$/g, ""))
+    .filter(Boolean)
+    .filter((word) => !fatherNameNoiseWords.has(word.replace(/[^A-Za-z]+/g, "").toUpperCase()))
+    .slice(0, 3)
+    .join(" ");
 }
 
 function normalizeOptionValue(value, options) {

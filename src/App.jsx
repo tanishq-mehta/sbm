@@ -1374,7 +1374,7 @@ function PersonPage({ id, token, isNew = false, canManageUsers = false, returnTo
   const imageMaxBytes = Number(imageInfo?.maxBytes || PERSON_IMAGE_MAX_BYTES);
 
   function updateField(field, value) {
-    setFormData((current) => ({ ...current, [field]: value }));
+    setFormData((current) => ({ ...current, [field]: normalizeFormFieldValue(field, value) }));
   }
 
   async function save(event) {
@@ -1611,6 +1611,8 @@ function FieldControl({ field, value, options = [], readOnly = false, placeholde
   const isDateField = dateFields.includes(field);
   const maxLength = addressLimitFields.includes(field) ? 75 : undefined;
   const type = inputType(field);
+  const controlValue = normalizeFormFieldValue(field, value);
+  const selectOnly = field === "Gender";
   const conditionTone = field === "Condition" ? conditionToneClass(value) : "";
   const labelClass = [multiline ? "span-2" : "", conditionTone ? "condition-field" : ""]
     .filter(Boolean)
@@ -1627,7 +1629,7 @@ function FieldControl({ field, value, options = [], readOnly = false, placeholde
       {readOnly ? (
         <input
           type="text"
-          value={value}
+          value={controlValue}
           placeholder={placeholder}
           readOnly
         />
@@ -1646,15 +1648,24 @@ function FieldControl({ field, value, options = [], readOnly = false, placeholde
             onChange={(event) => onChange(formatStoredDate(event.target.value))}
           />
         </div>
+      ) : selectOnly && selectOptions.length ? (
+        <select value={selectOptions.includes(controlValue) ? controlValue : ""} onChange={(event) => onChange(event.target.value)}>
+          <option value="">Select</option>
+          {selectOptions.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
       ) : selectOptions.length ? (
         <div className={`combo-field ${controlToneClass}`}>
           <input
             type={type}
-            value={value}
+            value={controlValue}
             maxLength={maxLength}
             onChange={(event) => onChange(event.target.value)}
           />
-          <select value={selectOptions.includes(value) ? value : ""} onChange={(event) => onChange(event.target.value)}>
+          <select value={selectOptions.includes(controlValue) ? controlValue : ""} onChange={(event) => onChange(event.target.value)}>
             <option value="">Select</option>
             {selectOptions.map((option) => (
               <option key={option} value={option}>
@@ -1665,7 +1676,7 @@ function FieldControl({ field, value, options = [], readOnly = false, placeholde
         </div>
       ) : multiline ? (
         <textarea
-          value={value}
+          value={controlValue}
           maxLength={maxLength}
           onChange={(event) => onChange(event.target.value)}
           rows={3}
@@ -1673,7 +1684,7 @@ function FieldControl({ field, value, options = [], readOnly = false, placeholde
       ) : (
         <input
           type={type}
-          value={value}
+          value={controlValue}
           maxLength={maxLength}
           onChange={(event) => onChange(event.target.value)}
         />
@@ -1846,6 +1857,37 @@ function fieldOptions(field, dropdownOptions, locationOptions) {
   if (field === "District") return locationOptions.districts || [];
   if (field === "City") return locationOptions.cities || [];
   return dropdownOptions[field] || [];
+}
+
+function normalizeFormFieldValue(field, value) {
+  if (field === "Gender") return normalizeGenderValue(value);
+  if (field === "Father Name") return normalizeFatherNameValue(value);
+  return value;
+}
+
+function normalizeGenderValue(value) {
+  const normalized = String(value || "").trim();
+  const comparable = normalized.toUpperCase();
+  if (comparable === "MALE" || comparable === "M") return "M";
+  if (comparable === "FEMALE" || comparable === "F") return "F";
+  return normalized;
+}
+
+function normalizeFatherNameValue(value) {
+  const normalized = String(value || "").trim();
+  if (!normalized) return "";
+
+  const noiseWords = new Set(["DR", "LATE", "LT", "MISS", "MR", "MRS", "MS", "SH", "SHRI", "SMT", "SR"]);
+  return normalized
+    .replace(/\b[CDSW]\s*\/\s*O\b/gi, " ")
+    .replace(/[()[\]{}]/g, " ")
+    .replace(/[,\-/]+/g, " ")
+    .split(/\s+/)
+    .map((word) => word.replace(/^\.+|\.+$/g, ""))
+    .filter(Boolean)
+    .filter((word) => !noiseWords.has(word.replace(/[^A-Za-z]+/g, "").toUpperCase()))
+    .slice(0, 3)
+    .join(" ");
 }
 
 function conditionToneClass(value) {

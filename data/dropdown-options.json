@@ -4,6 +4,10 @@
     "Verification Done",
     "Rectification Done"
   ],
+  "Gender": [
+    "M",
+    "F"
+  ],
   "Condition": [
     "Active",
     "Inactive",

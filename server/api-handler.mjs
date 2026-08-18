@@ -14,6 +14,7 @@ import {
   getVerificationSummary,
   importStatusValues,
   initializeDatabase,
+  isSbmExportExcludedPerson,
   listVerificationPeople,
   listAuditLogs,
   listAllAuditLogs,
@@ -182,6 +183,7 @@ export async function handleApiRequest(req, res) {
     if (url.pathname === "/api/export/sbm-pr.xlsx" && req.method === "GET") {
       const people = (await listAllPeople())
         .filter(isPrPerson)
+        .filter((person) => !isSbmExportExcludedPerson(person))
         .sort(compareByPrSerialNumber);
       const rows = people.map((person) =>
         sbmExportFields.map((field) => sbmExportCellValue(person, field))
@@ -790,6 +792,8 @@ function sbmExportCellValue(person, field) {
   const data = person.data || {};
   const newAddress = String(data["New Address"] || "").trim();
 
+  if (field === "Aadhaar No") return lastFourDigits(data[field]);
+  if (field === "Gender") return sbmGenderValue(data[field]);
   if (field === "Address Line 1" && newAddress) return newAddress;
   if (field === "Address Line 2" && newAddress) return "";
   if (field === "Photo File Name") {
@@ -799,6 +803,17 @@ function sbmExportCellValue(person, field) {
   if (field === "Initiation Place") return data.INITIATION_PLACE || "";
 
   return data[field] || "";
+}
+
+function lastFourDigits(value) {
+  return String(value || "").replace(/\D/g, "").slice(-4);
+}
+
+function sbmGenderValue(value) {
+  const normalized = String(value || "").trim().toUpperCase();
+  if (normalized === "MALE" || normalized === "M") return "M";
+  if (normalized === "FEMALE" || normalized === "F") return "F";
+  return String(value || "").trim();
 }
 
 function formatAuditTimestamp(value) {
