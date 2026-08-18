@@ -806,7 +806,8 @@ function sbmExportCellValue(person, field) {
 }
 
 function lastFourDigits(value) {
-  return String(value || "").replace(/\D/g, "").slice(-4);
+  const digits = String(value || "").replace(/\D/g, "").slice(-4);
+  return digits ? Number(digits) : "";
 }
 
 function sbmGenderValue(value) {

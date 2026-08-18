@@ -65,7 +65,7 @@ function createSheetXml(headers, rows) {
     const cells = row.map((value, columnIndex) => {
       const ref = `${columnName(columnIndex + 1)}${rowNumber}`;
       const style = rowNumber === 1 ? ' s="1"' : "";
-      return `<c r="${ref}" t="inlineStr"${style}><is><t xml:space="preserve">${escapeXml(value ?? "")}</t></is></c>`;
+      return cellXml(ref, value, style);
     }).join("");
     return `<row r="${rowNumber}">${cells}</row>`;
   }).join("");
@@ -84,6 +84,13 @@ function createSheetXml(headers, rows) {
   <cols>${colXml}</cols>
   <sheetData>${rowXml}</sheetData>
 </worksheet>`;
+}
+
+function cellXml(ref, value, style = "") {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return `<c r="${ref}"${style}><v>${value}</v></c>`;
+  }
+  return `<c r="${ref}" t="inlineStr"${style}><is><t xml:space="preserve">${escapeXml(value ?? "")}</t></is></c>`;
 }
 
 function zipStore(files) {
