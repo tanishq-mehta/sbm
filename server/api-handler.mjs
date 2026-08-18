@@ -794,8 +794,9 @@ function sbmExportCellValue(person, field) {
 
   if (field === "Aadhaar No") return lastFourDigits(data[field]);
   if (field === "Gender") return sbmGenderValue(data[field]);
-  if (field === "Address Line 1" && newAddress) return newAddress;
-  if (field === "Address Line 2" && newAddress) return "";
+  if (field === "Address Line 1") return sbmAddressValue(newAddress || data[field]);
+  if (field === "Address Line 2") return newAddress ? "" : sbmAddressValue(data[field]);
+  if (field === "Father Name" || field === "Spouse Name") return sbmFamilyNameValue(data[field], data);
   if (field === "Photo File Name") {
     const badgeNo = String(data["Badge no."] || person.badgeNo || "").trim();
     return badgeNo ? `${badgeNo}.jpg` : "";
@@ -807,7 +808,7 @@ function sbmExportCellValue(person, field) {
 
 function lastFourDigits(value) {
   const digits = String(value || "").replace(/\D/g, "").slice(-4);
-  return digits ? Number(digits) : "";
+  return digits ? { value: Number(digits), numberFormat: "0000" } : "";
 }
 
 function sbmGenderValue(value) {
@@ -815,6 +816,47 @@ function sbmGenderValue(value) {
   if (normalized === "MALE" || normalized === "M") return "M";
   if (normalized === "FEMALE" || normalized === "F") return "F";
   return String(value || "").trim();
+}
+
+function sbmAddressValue(value) {
+  return String(value || "")
+    .replace(/\b\d{6}\b/g, " ")
+    .replace(/\s+([,;:.])/g, "$1")
+    .replace(/([,;:.]){2,}/g, "$1")
+    .replace(/^[\s,;:.]+|[\s,;:.]+$/g, "")
+    .replace(/\s+/g, " ")
+    .slice(0, 75)
+    .trim();
+}
+
+function sbmFamilyNameValue(value, data) {
+  const words = cleanNameWords(value);
+  if (!words.length) return "";
+  const fallbackWords = [
+    ...cleanNameWords(data["Last Name"]),
+    ...cleanNameWords(data["Middle Name"]),
+    ...cleanNameWords(data["First Name"]),
+    words[0],
+  ];
+
+  for (const word of fallbackWords) {
+    if (words.length >= 2) break;
+    words.push(word);
+  }
+
+  return words.slice(0, 3).join(" ");
+}
+
+function cleanNameWords(value) {
+  const noiseWords = new Set(["DR", "LATE", "LT", "MISS", "MR", "MRS", "MS", "SH", "SHRI", "SMT", "SR"]);
+  return String(value || "")
+    .replace(/\b[CDSW]\s*\/\s*O\b/gi, " ")
+    .replace(/[()[\]{}]/g, " ")
+    .replace(/[,\-/]+/g, " ")
+    .split(/\s+/)
+    .map((word) => word.replace(/^\.+|\.+$/g, ""))
+    .filter(Boolean)
+    .filter((word) => !noiseWords.has(word.replace(/[^A-Za-z]+/g, "").toUpperCase()));
 }
 
 function formatAuditTimestamp(value) {
