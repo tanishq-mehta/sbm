@@ -184,6 +184,7 @@ export async function handleApiRequest(req, res) {
       const people = (await listAllPeople())
         .filter(isPrPerson)
         .filter((person) => !isSbmExportExcludedPerson(person))
+        .filter(isSbmExportVerifiedPerson)
         .sort(compareByPrSerialNumber);
       const rows = people.map((person) =>
         sbmExportFields.map((field) => sbmExportCellValue(person, field))
@@ -770,6 +771,11 @@ function isPrPerson(person) {
     .trim()
     .toUpperCase()
     .startsWith("PR");
+}
+
+function isSbmExportVerifiedPerson(person) {
+  const status = String(person.data?.["Verification Status"] || "").trim().toLowerCase();
+  return status === "verification done" || status === "rectification done";
 }
 
 function compareByPrSerialNumber(left, right) {
