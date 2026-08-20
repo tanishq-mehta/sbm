@@ -54,6 +54,7 @@ import {
 } from "./r2-storage.mjs";
 
 let initializationPromise;
+const sbmExportElderlyCutoffDate = new Date(Date.UTC(2026, 11, 31));
 
 export async function handleApiRequest(req, res) {
   try {
@@ -183,7 +184,7 @@ export async function handleApiRequest(req, res) {
     if (url.pathname === "/api/export/sbm-pr.xlsx" && req.method === "GET") {
       const people = (await listAllPeople())
         .filter(isPrPerson)
-        .filter((person) => !isSbmExportExcludedPerson(person))
+        .filter((person) => !isSbmExportExcludedPerson(person, sbmExportElderlyCutoffDate))
         .filter(isSbmExportVerifiedPerson)
         .sort(compareByPrSerialNumber);
       const rows = people.map((person) =>
