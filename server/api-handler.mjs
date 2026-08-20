@@ -798,7 +798,7 @@ function sbmExportCellValue(person, field) {
   const data = person.data || {};
   const newAddress = String(data["New Address"] || "").trim();
 
-  if (field === "Aadhaar No") return lastFourDigits(data[field]);
+  if (field === "Aadhaar No") return aadhaarNumber(data[field]);
   if (field === "Gender") return sbmGenderValue(data[field]);
   if (field === "Address Line 1") return sbmAddressValue(newAddress || data[field]);
   if (field === "Address Line 2") return newAddress ? "" : sbmAddressValue(data[field]);
@@ -812,9 +812,9 @@ function sbmExportCellValue(person, field) {
   return data[field] || "";
 }
 
-function lastFourDigits(value) {
-  const digits = String(value || "").replace(/\D/g, "").slice(-4);
-  return digits ? { value: Number(digits), numberFormat: "0000" } : "";
+function aadhaarNumber(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+  return digits ? { value: Number(digits), numberFormat: "000000000000" } : "";
 }
 
 function sbmGenderValue(value) {
