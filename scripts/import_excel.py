@@ -15,7 +15,7 @@ TARGET_SHEETS = {f"team{i}" for i in range(1, 7)}
 HEADER_MARKERS = {"Badge no.", "First Name", "Mobile No"}
 VERIFICATION_OPTIONS = ["None", "Verification Done", "Rectification Done"]
 STATUS_OPTIONS = ["PERMANENT", "OPEN", "ELDERLY", "NEW", "NI", "ESS", "VSS"]
-CONDITION_OPTIONS = ["Active", "Inactive", "Cancelled"]
+CONDITION_OPTIONS = ["Active", "Inactive", "Cancelled", "Transferred", "Withdrawn", "Expired"]
 INITIATED_OPTIONS = ["Yes", "No"]
 INITIATION_BY_OPTIONS = [
     "Baba Gurinder Singh Ji",

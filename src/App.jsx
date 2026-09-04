@@ -1897,8 +1897,8 @@ function normalizeFatherNameValue(value) {
 function conditionToneClass(value) {
   const normalized = String(value || "").trim().toLowerCase();
   if (normalized === "active") return "condition-active";
-  if (normalized === "inactive") return "condition-inactive";
-  if (normalized === "cancelled" || normalized === "canceled") return "condition-cancelled";
+  if (["inactive", "transferred"].includes(normalized)) return "condition-inactive";
+  if (["cancelled", "canceled", "withdrawn", "expired"].includes(normalized)) return "condition-cancelled";
   return "";
 }
 

@@ -11,7 +11,10 @@
   "Condition": [
     "Active",
     "Inactive",
-    "Cancelled"
+    "Cancelled",
+    "Transferred",
+    "Withdrawn",
+    "Expired"
   ],
   "Is Initiated": [
     "Yes",
