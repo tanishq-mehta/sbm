@@ -565,6 +565,7 @@ function HomePage({ token, canManageUsers }) {
                 {results.map((person) => (
                   <tr
                     key={person.id}
+                    className={conditionToneClass(person.condition)}
                     tabIndex={0}
                     onClick={() => (window.location.hash = `#/people/${person.id}`)}
                     onKeyDown={(event) => {
@@ -1120,6 +1121,7 @@ function VerificationListPage({ token, route }) {
                   {payload.results.map((person) => (
                     <tr
                       key={person.id}
+                      className={conditionToneClass(person.condition)}
                       tabIndex={0}
                       onClick={() => openPersonFromVerificationList(person.id, currentHash)}
                       onKeyDown={(event) => {
@@ -1225,6 +1227,7 @@ function DataQualityListPage({ token, route }) {
                   {payload.results.map((person) => (
                     <tr
                       key={person.id}
+                      className={conditionToneClass(person.condition)}
                       tabIndex={0}
                       onClick={() => openPersonFromDataQuality(person.id, currentHash)}
                       onKeyDown={(event) => {
@@ -1897,8 +1900,11 @@ function normalizeFatherNameValue(value) {
 function conditionToneClass(value) {
   const normalized = String(value || "").trim().toLowerCase();
   if (normalized === "active") return "condition-active";
-  if (["inactive", "transferred"].includes(normalized)) return "condition-inactive";
-  if (["cancelled", "canceled", "withdrawn", "expired"].includes(normalized)) return "condition-cancelled";
+  if (normalized === "inactive") return "condition-inactive";
+  if (normalized === "transferred") return "condition-transferred";
+  if (normalized === "withdrawn") return "condition-withdrawn";
+  if (normalized === "expired") return "condition-expired";
+  if (normalized === "cancelled" || normalized === "canceled") return "condition-cancelled";
   return "";
 }
 

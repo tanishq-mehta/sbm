@@ -193,6 +193,27 @@ textarea[readonly] {
   color: #a83629;
 }
 
+.condition-transferred input,
+.condition-transferred select {
+  border-color: #8db9df;
+  background: #eef7ff;
+  color: #285d86;
+}
+
+.condition-withdrawn input,
+.condition-withdrawn select {
+  border-color: #c7a6d8;
+  background: #f8f0fc;
+  color: #6b4381;
+}
+
+.condition-expired input,
+.condition-expired select {
+  border-color: #b5bfbb;
+  background: #f3f6f5;
+  color: #52605c;
+}
+
 .primary-button,
 .secondary-button,
 .danger-button {
@@ -539,6 +560,84 @@ tbody tr:hover,
 tbody tr:focus {
   background: #f1f7f4;
   outline: none;
+}
+
+tbody tr.condition-active {
+  background: #f1faf5;
+}
+
+tbody tr.condition-inactive {
+  background: #fff8df;
+}
+
+tbody tr.condition-cancelled {
+  background: #fff0ed;
+}
+
+tbody tr.condition-transferred {
+  background: #eef7ff;
+}
+
+tbody tr.condition-withdrawn {
+  background: #f8f0fc;
+}
+
+tbody tr.condition-expired {
+  background: #f3f6f5;
+}
+
+tbody tr.condition-active:hover,
+tbody tr.condition-active:focus {
+  background: #e5f5ec;
+}
+
+tbody tr.condition-inactive:hover,
+tbody tr.condition-inactive:focus {
+  background: #fff1bf;
+}
+
+tbody tr.condition-cancelled:hover,
+tbody tr.condition-cancelled:focus {
+  background: #ffe1dc;
+}
+
+tbody tr.condition-transferred:hover,
+tbody tr.condition-transferred:focus {
+  background: #dceeff;
+}
+
+tbody tr.condition-withdrawn:hover,
+tbody tr.condition-withdrawn:focus {
+  background: #f0ddf8;
+}
+
+tbody tr.condition-expired:hover,
+tbody tr.condition-expired:focus {
+  background: #e8eeeb;
+}
+
+tbody tr.condition-active td:first-child {
+  box-shadow: inset 4px 0 0 #2f8f6b;
+}
+
+tbody tr.condition-inactive td:first-child {
+  box-shadow: inset 4px 0 0 #b88900;
+}
+
+tbody tr.condition-cancelled td:first-child {
+  box-shadow: inset 4px 0 0 #c44135;
+}
+
+tbody tr.condition-transferred td:first-child {
+  box-shadow: inset 4px 0 0 #337ab7;
+}
+
+tbody tr.condition-withdrawn td:first-child {
+  box-shadow: inset 4px 0 0 #8a5ca8;
+}
+
+tbody tr.condition-expired td:first-child {
+  box-shadow: inset 4px 0 0 #6b7672;
 }
 
 .result-note {

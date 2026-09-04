@@ -3617,6 +3617,7 @@ function toSummary(person) {
     id: person.id,
     name: person.fullName || "(No name)",
     badgeNo: person.badgeNo,
+    condition: normalizeValue(person.data?.[conditionField]),
     department: person.department,
     phoneNumber: person.phoneNumber,
   };
