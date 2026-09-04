@@ -114,6 +114,11 @@ const dataQualityFields = [
     fields: ["Sewa Dept - Major Centre"],
   },
   {
+    key: "condition",
+    label: "Condition",
+    fields: [conditionField],
+  },
+  {
     key: "photo",
     label: "Photo",
     fields: ["Photo"],
