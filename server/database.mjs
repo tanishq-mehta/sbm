@@ -1090,7 +1090,7 @@ export async function listVerificationPeople({ status = "", badgePrefix = "", de
 export async function getDataQualitySummary(options = {}) {
   await initializeDatabase();
   const onlyNonElderly = Boolean(options.onlyNonElderly);
-  const people = (await getAllPersonRows()).map(rowToPerson).filter(isPrBadgePerson);
+  const people = (await getAllPersonRows()).map(rowToPerson).filter(isDataQualityBadgePerson);
   const fieldsSummary = dataQualityFields.map(emptyDataQualityFieldSummary);
   const fieldsByKey = new Map(fieldsSummary.map((field) => [field.key, field]));
   const optionSets = dataQualityOptionSets();
@@ -1143,7 +1143,9 @@ export async function listDataQualityPeople({ field, issue, group, onlyNonElderl
   if (!issueType) throw statusError(400, "Unknown data quality issue.");
   if (!groupDefinition) throw statusError(400, "Unknown verification group.");
 
-  const people = (await getAllPersonRows()).map(rowToPerson).filter(isPrBadgePerson);
+  const people = (await getAllPersonRows())
+    .map(rowToPerson)
+    .filter(isDataQualityBadgePerson);
   const validOptions = dataQualityOptionSets().get(fieldDefinition.key) || new Set();
   const context = {
     photoPersonIds: fieldDefinition.key === "photo" ? await personImagePersonIds() : new Set(),
@@ -3651,6 +3653,10 @@ function badgePrefixForPerson(person) {
 
 function isPrBadgePerson(person) {
   return badgePrefixForPerson(person) === "PR";
+}
+
+function isDataQualityBadgePerson(person) {
+  return ["EC", "PR"].includes(badgePrefixForPerson(person));
 }
 
 function isElderlyStatusPerson(person) {

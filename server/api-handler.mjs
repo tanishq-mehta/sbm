@@ -415,7 +415,8 @@ export async function handleApiRequest(req, res) {
         return;
       }
 
-      const located = await locatePersonImage(person);
+      const metadata = await getPersonImageMetadata(person.id);
+      const located = await locatePersonImage(person, metadata);
       if (!located) {
         sendJson(res, 404, { message: "Photo not found." });
         return;
@@ -555,12 +556,32 @@ async function personImageInfo(person) {
 }
 
 async function locatePersonImage(person, metadata = null) {
-  const badgeNo = person.data?.["Badge no."] || person.badgeNo || "";
-  for (const key of imageCandidateKeys(badgeNo, metadata?.objectKey || "")) {
+  for (const key of personImageCandidateKeys(person, metadata)) {
     const object = await headImageObject(key);
     if (object) return object;
   }
   return null;
+}
+
+function personImageCandidateKeys(person, metadata = null) {
+  const keys = [];
+  if (metadata?.objectKey) keys.push(metadata.objectKey);
+
+  for (const badgeNo of personImageBadgeNumbers(person, metadata)) {
+    keys.push(...imageCandidateKeys(badgeNo));
+  }
+
+  return [...new Set(keys.filter(Boolean))];
+}
+
+function personImageBadgeNumbers(person, metadata = null) {
+  return [
+    metadata?.badgeNo,
+    person.data?.["Badge no."] || person.badgeNo,
+    person.data?.["EC No."],
+  ]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
 }
 
 function imageInfoPayload(person, details = {}) {

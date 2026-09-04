@@ -1369,8 +1369,9 @@ function PersonPage({ id, token, isNew = false, canManageUsers = false, returnTo
 
   const groupedSections = useMemo(() => buildSections(fields), [fields]);
   const backTarget = returnTo || "#/home";
-  const imageStorageError = imageInfo?.storageError || imageError;
-  const imageStorageReady = imageInfo?.configured === true && !imageStorageError;
+  const imageStorageError = imageInfo?.storageError || (!imageInfo ? imageError : "");
+  const imagePreviewError = imageInfo ? imageError : "";
+  const imageStorageReady = imageInfo?.configured === true && !imageInfo?.storageError;
   const imageMaxBytes = Number(imageInfo?.maxBytes || PERSON_IMAGE_MAX_BYTES);
 
   function updateField(field, value) {
@@ -1525,7 +1526,7 @@ function PersonPage({ id, token, isNew = false, canManageUsers = false, returnTo
               <img src={imagePreviewUrl} alt={`${displayFullName(formData) || "User"} photo`} />
             ) : (
               <span className="photo-placeholder">
-                {photoPlaceholderText({ imageInfo, imageStorageError })}
+                {photoPlaceholderText({ imageInfo, imageStorageError, imagePreviewError })}
               </span>
             )}
           </div>
@@ -1560,7 +1561,9 @@ function PersonPage({ id, token, isNew = false, canManageUsers = false, returnTo
               </button>
             </div>
             {imageFile ? <p className="photo-meta">Selected: {imageFile.name}</p> : null}
-            {imageStorageError ? <p className="form-error">{imageStorageError}</p> : null}
+            {imageStorageError || imagePreviewError ? (
+              <p className="form-error">{imageStorageError || imagePreviewError}</p>
+            ) : null}
           </div>
         </section>
       ) : null}
@@ -1693,8 +1696,9 @@ function FieldControl({ field, value, options = [], readOnly = false, placeholde
   );
 }
 
-function photoPlaceholderText({ imageInfo, imageStorageError }) {
+function photoPlaceholderText({ imageInfo, imageStorageError, imagePreviewError }) {
   if (imageStorageError) return "Image storage check failed";
+  if (imagePreviewError) return "Photo preview failed";
   if (imageInfo?.configured === false) return "Image storage not configured";
   return "No photo uploaded";
 }

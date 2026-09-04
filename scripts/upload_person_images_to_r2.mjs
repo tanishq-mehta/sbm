@@ -162,28 +162,48 @@ async function processImageFile({ badgeNo, extension, fileName, filePath }) {
 }
 
 async function findPersonByBadge(badgeNo) {
-  const params = new URLSearchParams({
-    field: "Badge no.",
-    q: badgeNo,
-    limit: "500",
-  });
-  const payload = await apiRequest("GET", `/api/people?${params.toString()}`);
-  const exactMatches = (payload.results || []).filter(
-    (person) => normalizeBadge(person.badgeNo) === normalizeBadge(badgeNo)
-  );
+  const badgeKey = normalizeBadge(badgeNo);
+  const exactMatches = new Map();
 
-  if (exactMatches.length === 0) return null;
-  if (exactMatches.length > 1) {
+  for (const person of await exactPeopleByField("Badge no.", badgeNo, (detail) => detail.badgeNo)) {
+    exactMatches.set(person.id, person);
+  }
+  for (const person of await exactPeopleByField("EC No.", badgeNo, (detail) => detail.data?.["EC No."])) {
+    exactMatches.set(person.id, person);
+  }
+
+  const matches = [...exactMatches.values()];
+  if (matches.length === 0) return null;
+  if (matches.length > 1) {
     return {
       duplicate: true,
-      matches: exactMatches.map((person) => ({
+      matches: matches.map((person) => ({
         id: person.id,
         name: person.name,
         badgeNo: person.badgeNo,
       })),
     };
   }
-  return exactMatches[0];
+  return matches[0];
+
+  async function exactPeopleByField(field, value, valueForDetail) {
+    const params = new URLSearchParams({
+      field,
+      q: value,
+      limit: "500",
+    });
+    const payload = await apiRequest("GET", `/api/people?${params.toString()}`);
+    const matches = [];
+
+    for (const person of payload.results || []) {
+      const detail = field === "Badge no."
+        ? { ...person, data: { "Badge no.": person.badgeNo } }
+        : await apiRequest("GET", `/api/people/${person.id}`);
+      if (normalizeBadge(valueForDetail(detail)) === badgeKey) matches.push(person);
+    }
+
+    return matches;
+  }
 }
 
 async function uploadPhoto(personId, filePath, contentType) {
