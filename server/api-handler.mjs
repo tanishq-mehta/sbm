@@ -118,8 +118,10 @@ export async function handleApiRequest(req, res) {
       }
 
       await ensureDatabaseInitialized();
+      const asOf = elderlyAlertMonthlyCutoffDate();
       sendJson(res, 200, await runElderlyAlertScan({
-        runKey: elderlyAlertMonthlyRunKey(),
+        asOf,
+        runKey: elderlyAlertMonthlyRunKey(asOf),
         source: "vercel-cron",
       }));
       return;
@@ -675,7 +677,13 @@ function isValidCronRequest(req) {
   return req.headers.authorization === `Bearer ${secret}`;
 }
 
-function elderlyAlertMonthlyRunKey(date = new Date()) {
+function elderlyAlertMonthlyCutoffDate(date = new Date()) {
+  const value = date instanceof Date ? date : new Date(date);
+  const safeDate = Number.isNaN(value.getTime()) ? new Date() : value;
+  return new Date(Date.UTC(safeDate.getUTCFullYear(), safeDate.getUTCMonth(), 0));
+}
+
+function elderlyAlertMonthlyRunKey(date = elderlyAlertMonthlyCutoffDate()) {
   return `elderly-alerts-${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 

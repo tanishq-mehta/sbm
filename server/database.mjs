@@ -931,6 +931,7 @@ export async function listAllPeople() {
 
 export async function listElderlyAlerts() {
   await initializeDatabase();
+  const asOfIso = datePartsToIso(elderlyAlertScanAsOfParts());
 
   const rows = databaseProvider === "postgres"
     ? (
@@ -957,8 +958,9 @@ export async function listElderlyAlerts() {
           INNER JOIN people AS p ON p.id = ea.person_id
           WHERE ea.resolved_at IS NULL
             AND p.deleted_at IS NULL
+            AND ea.turns_70_on <= $1::date
           ORDER BY ea.turns_70_on ASC, lower(p.full_name), ea.id
-        `)
+        `, [asOfIso])
       ).rows
     : getSqlite()
         .prepare(`
@@ -984,9 +986,10 @@ export async function listElderlyAlerts() {
           INNER JOIN people AS p ON p.id = ea.person_id
           WHERE ea.resolved_at IS NULL
             AND p.deleted_at IS NULL
+            AND ea.turns_70_on <= ?
           ORDER BY ea.turns_70_on ASC, p.full_name COLLATE NOCASE, ea.id
         `)
-        .all();
+        .all(asOfIso);
 
   const results = rows
     .map(rowToElderlyAlert)
@@ -1529,7 +1532,7 @@ async function getAllPersonRows() {
 }
 
 async function runElderlyAlertScanInternal(options = {}) {
-  const asOfParts = datePartsFromDate(options.asOf || new Date());
+  const asOfParts = elderlyAlertScanAsOfParts(options.asOf);
   const asOfIso = datePartsToIso(asOfParts);
   const source = normalizeValue(options.source || options.changedBy || "manual") || "manual";
   const runKey = normalizeValue(options.runKey);
@@ -1551,7 +1554,7 @@ async function runElderlyAlertScanInternal(options = {}) {
 
       const changed = await upsertElderlyAlertsPostgres(client, scanPlan.alerts);
 
-      const pendingTotal = await pendingElderlyAlertCountPostgres(client);
+      const pendingTotal = await pendingElderlyAlertCountPostgres(client, asOfIso);
       const summary = elderlyAlertScanSummary({
         runKey,
         source,
@@ -1622,7 +1625,7 @@ async function runElderlyAlertScanInternal(options = {}) {
       changed += result.changes;
     }
 
-    const pendingTotal = pendingElderlyAlertCountSqlite(db);
+    const pendingTotal = pendingElderlyAlertCountSqlite(db, asOfIso);
     const summary = elderlyAlertScanSummary({
       runKey,
       source,
@@ -1819,19 +1822,20 @@ async function getExistingElderlyAlertRunSummary(runKey) {
   };
 }
 
-async function pendingElderlyAlertCountPostgres(client) {
+async function pendingElderlyAlertCountPostgres(client, asOfIso) {
   const { rows } = await client.query(`
     SELECT COUNT(*)::int AS total
     FROM elderly_alerts AS ea
     INNER JOIN people AS p ON p.id = ea.person_id
     WHERE ea.resolved_at IS NULL
       AND p.deleted_at IS NULL
+      AND ea.turns_70_on <= $3::date
       AND NOT (upper(coalesce(p.data->>$1, '')) = ANY($2::text[]))
-  `, [statusField, [...elderlyAlertResolvedStatuses]]);
+  `, [statusField, [...elderlyAlertResolvedStatuses], asOfIso]);
   return rows[0]?.total || 0;
 }
 
-function pendingElderlyAlertCountSqlite(db) {
+function pendingElderlyAlertCountSqlite(db, asOfIso) {
   const rows = db
     .prepare(`
       SELECT p.data
@@ -1839,8 +1843,9 @@ function pendingElderlyAlertCountSqlite(db) {
       INNER JOIN people AS p ON p.id = ea.person_id
       WHERE ea.resolved_at IS NULL
         AND p.deleted_at IS NULL
+        AND ea.turns_70_on <= ?
     `)
-    .all();
+    .all(asOfIso);
   return rows.filter((row) => !isElderlyAlertResolvedStatus(JSON.parse(row.data)?.[statusField])).length;
 }
 
@@ -3122,6 +3127,12 @@ function datePartsFromDate(value) {
   };
 }
 
+function elderlyAlertScanAsOfParts(value) {
+  if (value) return datePartsFromDate(value);
+  const today = new Date();
+  return datePartsFromDate(new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 0)));
+}
+
 function datePartsToIso(parts) {
   return [
     String(parts.year).padStart(4, "0"),
@@ -3133,7 +3144,11 @@ function datePartsToIso(parts) {
 function dateOnlyValue(value) {
   if (!value) return "";
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return value.toISOString().slice(0, 10);
+    return [
+      String(value.getFullYear()).padStart(4, "0"),
+      String(value.getMonth() + 1).padStart(2, "0"),
+      String(value.getDate()).padStart(2, "0"),
+    ].join("-");
   }
   return String(value).slice(0, 10);
 }
