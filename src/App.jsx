@@ -75,6 +75,13 @@ const sections = [
       "Verification Status",
     ],
   },
+  {
+    title: "Attendance",
+    fields: [
+      "Attendance",
+      "Last Attended Date",
+    ],
+  },
 ];
 
 export default function App() {
@@ -158,6 +165,12 @@ export default function App() {
           initialDepartment={route.department}
           initialMajorCentreOnlyNonElderly={route.onlyNonElderly}
         />
+      ) : route.name === "attendance" ? (
+        canManageUsers ? (
+          <AttendancePage token={token} />
+        ) : (
+          <ForbiddenPage />
+        )
       ) : route.name === "new-person" ? (
         canManageUsers ? (
           <PersonPage token={token} isNew canManageUsers returnTo={route.returnTo} />
@@ -272,6 +285,11 @@ function Shell({ children, onLogout, user, token }) {
           <button className="secondary-button compact" onClick={() => (window.location.hash = "#/summary")}>
             Summary
           </button>
+          {user?.isAdmin ? (
+            <button className="secondary-button compact" onClick={() => (window.location.hash = "#/attendance")}>
+              Attendance
+            </button>
+          ) : null}
           <button className="secondary-button compact" onClick={() => (window.location.hash = "#/audit")}>
             Audit history
           </button>
@@ -497,6 +515,11 @@ function HomePage({ token, canManageUsers }) {
           {canManageUsers ? (
             <button className="primary-button" onClick={() => (window.location.hash = "#/people/new")}>
               Create new user
+            </button>
+          ) : null}
+          {canManageUsers ? (
+            <button className="secondary-button" onClick={() => (window.location.hash = "#/attendance")}>
+              Attendance maintenance
             </button>
           ) : null}
           <button className="secondary-button" onClick={() => (window.location.hash = "#/summary")}>
@@ -1254,6 +1277,300 @@ function DataQualityListPage({ token, route }) {
   );
 }
 
+function AttendancePage({ token }) {
+  const [files, setFiles] = useState([]);
+  const [rows, setRows] = useState([]);
+  const [summary, setSummary] = useState(null);
+  const [result, setResult] = useState(null);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [applying, setApplying] = useState(false);
+  const [error, setError] = useState("");
+
+  const reviewRows = useMemo(() => rows.filter((row) => row.needsReview), [rows]);
+  const resultIssues = useMemo(
+    () => (result?.rows || []).filter((row) => row.Result !== "Updated"),
+    [result]
+  );
+
+  async function previewFiles(event) {
+    event.preventDefault();
+    setError("");
+    setResult(null);
+
+    if (!files.length) {
+      setError("Choose one or more .xlsx files first.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const uploadFiles = await Promise.all(
+        files.map(async (file) => ({
+          fileName: file.name,
+          dataBase64: await fileToBase64(file),
+        }))
+      );
+      const payload = await apiFetch("/api/admin/attendance/preview", {
+        method: "POST",
+        token,
+        body: JSON.stringify({ files: uploadFiles }),
+      });
+      const nextRows = payload.rows || [];
+      setRows(nextRows);
+      setSummary(payload.summary || null);
+      setReviewOpen(nextRows.some((row) => row.needsReview));
+    } catch (err) {
+      setError(err.message);
+      setRows([]);
+      setSummary(null);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function updateAttendanceRow(clientRowId, patch) {
+    setRows((current) =>
+      current.map((row) => (row.clientRowId === clientRowId ? { ...row, ...patch } : row))
+    );
+  }
+
+  async function applyAttendance() {
+    setError("");
+    setApplying(true);
+    try {
+      const payload = await apiFetch("/api/admin/attendance/apply", {
+        method: "POST",
+        token,
+        body: JSON.stringify({ rows }),
+      });
+      setResult(payload);
+      setReviewOpen(false);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setApplying(false);
+    }
+  }
+
+  function downloadReport() {
+    if (!result?.workbookBase64) return;
+    downloadBase64Workbook(result.workbookBase64, result.fileName || "attendance-import.xlsx");
+  }
+
+  return (
+    <main className="page attendance-page">
+      <section className="page-heading">
+        <div>
+          <p className="eyebrow">Attendance maintenance</p>
+          <h1>Upload attendance Excel files</h1>
+        </div>
+        <div className="page-actions">
+          <button className="secondary-button" onClick={() => (window.location.hash = "#/home")}>
+            Back to search
+          </button>
+        </div>
+      </section>
+
+      <form className="attendance-upload-panel" onSubmit={previewFiles}>
+        <label className="file-picker">
+          <span>Excel workbooks</span>
+          <input
+            type="file"
+            multiple
+            accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            onChange={(event) => setFiles([...event.target.files])}
+          />
+        </label>
+        <button className="primary-button" type="submit" disabled={loading}>
+          {loading ? "Reading files..." : "Preview upload"}
+        </button>
+      </form>
+
+      {files.length ? <p className="result-note">Selected: {files.map((file) => file.name).join(", ")}</p> : null}
+      {error ? <p className="form-error wide">{error}</p> : null}
+
+      {summary ? (
+        <section className="results-panel attendance-results">
+          <div className="results-header">
+            <div>
+              <h2>Preview</h2>
+              <span>
+                {summary.readyRows || 0} ready, {summary.reviewRows || 0} need review,{" "}
+                {summary.fileIssues || 0} file issues
+              </span>
+            </div>
+            <div className="page-actions">
+              {reviewRows.length ? (
+                <button type="button" className="secondary-button" onClick={() => setReviewOpen(true)}>
+                  Review anomalies
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="primary-button"
+                onClick={applyAttendance}
+                disabled={applying || !rows.length || reviewRows.length > 0}
+              >
+                {applying ? "Applying..." : "Apply attendance"}
+              </button>
+            </div>
+          </div>
+          {rows.length ? (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Source</th>
+                    <th>Badge</th>
+                    <th>Date</th>
+                    <th>Issue</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.slice(0, 80).map((row) => (
+                    <tr key={row.clientRowId}>
+                      <td>
+                        {attendanceRowLocation(row)}
+                        <span>{row.fileName}</span>
+                      </td>
+                      <td>{row.badgeNo || row.rawBadge || "-"}</td>
+                      <td>{row.attendanceDate || row.rawDate || "-"}</td>
+                      <td>{attendanceIssueText(row) || "Ready"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="empty-state">No attendance rows found.</p>
+          )}
+        </section>
+      ) : null}
+
+      {result ? (
+        <section className="results-panel attendance-results">
+          <div className="results-header">
+            <div>
+              <h2>Import result</h2>
+              <span>
+                {result.summary?.updatedRows || 0} rows updated across {result.summary?.updatedPeople || 0} users
+              </span>
+            </div>
+            <button type="button" className="primary-button" onClick={downloadReport}>
+              Download consolidated Excel
+            </button>
+          </div>
+          {resultIssues.length ? (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Source</th>
+                    <th>Badge</th>
+                    <th>Date</th>
+                    <th>Result</th>
+                    <th>Message</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {resultIssues.map((row, index) => (
+                    <tr key={`${row.File}-${row.Row}-${row["Final Badge"]}-${index}`}>
+                      <td>
+                        {row.Sheet ? `${row.Sheet}${row.Row ? ` row ${row.Row}` : ""}` : row.Row || "-"}
+                        <span>{row.File}</span>
+                      </td>
+                      <td>{row["Final Badge"] || row["Original Badge"] || "-"}</td>
+                      <td>{row["Attendance Date"] || "-"}</td>
+                      <td>{row.Result}</td>
+                      <td>{row.Message}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="empty-state">All uploaded attendance rows were applied.</p>
+          )}
+        </section>
+      ) : null}
+
+      {reviewOpen ? (
+        <AttendanceReviewDialog
+          rows={reviewRows}
+          applying={applying}
+          onChange={updateAttendanceRow}
+          onClose={() => setReviewOpen(false)}
+          onSubmit={applyAttendance}
+        />
+      ) : null}
+    </main>
+  );
+}
+
+function AttendanceReviewDialog({ rows, applying, onChange, onClose, onSubmit }) {
+  return (
+    <div className="dialog-backdrop" role="presentation">
+      <section className="dialog-panel attendance-dialog" role="dialog" aria-modal="true" aria-labelledby="attendance-review-title">
+        <header>
+          <div>
+            <p className="eyebrow">Review required</p>
+            <h2 id="attendance-review-title">Fix attendance anomalies</h2>
+          </div>
+          <button type="button" className="secondary-button compact" onClick={onClose} disabled={applying}>
+            Close
+          </button>
+        </header>
+        <div className="table-wrap dialog-table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Source</th>
+                <th>Issue</th>
+                <th>Badge number</th>
+                <th>Date</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.clientRowId}>
+                  <td>
+                    {attendanceRowLocation(row)}
+                    <span>{row.fileName}</span>
+                  </td>
+                  <td>{attendanceIssueText(row)}</td>
+                  <td>
+                    <input
+                      value={row.badgeNo ?? row.rawBadge ?? ""}
+                      disabled={row.fileIssue || applying}
+                      onChange={(event) => onChange(row.clientRowId, { badgeNo: event.target.value })}
+                    />
+                  </td>
+                  <td>
+                    <input
+                      value={row.attendanceDate ?? row.rawDate ?? ""}
+                      disabled={row.fileIssue || applying}
+                      onChange={(event) => onChange(row.clientRowId, { attendanceDate: event.target.value })}
+                    />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="form-actions dialog-actions">
+          <button type="button" className="secondary-button" onClick={onClose} disabled={applying}>
+            Cancel
+          </button>
+          <button type="button" className="primary-button" onClick={onSubmit} disabled={applying}>
+            {applying ? "Applying..." : "Apply edited rows"}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function PersonPage({ id, token, isNew = false, canManageUsers = false, returnTo = "" }) {
   const [person, setPerson] = useState(null);
   const [fields, setFields] = useState([]);
@@ -1582,7 +1899,7 @@ function PersonPage({ id, token, isNew = false, canManageUsers = false, returnTo
                   field={field}
                   value={formData[field] || ""}
                   options={fieldOptions(field, dropdownOptions, locationOptions)}
-                  readOnly={field === "S No"}
+                  readOnly={["S No", "Attendance", "Last Attended Date"].includes(field)}
                   placeholder={field === "S No" ? "Assigned automatically" : ""}
                   onChange={(value) => updateField(field, value)}
                 />
@@ -1751,6 +2068,25 @@ async function downloadWorkbook(path, token, fallbackFilename) {
   URL.revokeObjectURL(url);
 }
 
+function downloadBase64Workbook(base64, filename) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  const blob = new Blob([bytes], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -1758,7 +2094,7 @@ function fileToBase64(file) {
       const result = String(reader.result || "");
       resolve(result.includes(",") ? result.split(",", 2)[1] : result);
     };
-    reader.onerror = () => reject(reader.error || new Error("Could not read photo."));
+    reader.onerror = () => reject(reader.error || new Error("Could not read file."));
     reader.readAsDataURL(file);
   });
 }
@@ -1783,6 +2119,7 @@ function readRoute() {
   const personMatch = path.match(/^#\/people\/(\d+)$/);
   if (personMatch) return { name: "person", id: personMatch[1], returnTo };
   if (path === "#/audit") return { name: "audit" };
+  if (path === "#/attendance") return { name: "attendance" };
   if (path === "#/summary/verification") {
     return {
       name: "verification-list",
@@ -1840,6 +2177,17 @@ function openPersonFromDataQuality(id, returnHash) {
   window.location.hash = `#/people/${id}?returnTo=${encodeURIComponent(returnHash)}`;
 }
 
+function attendanceRowLocation(row) {
+  const parts = [];
+  if (row.sheetName) parts.push(row.sheetName);
+  if (row.rowNumber) parts.push(`row ${row.rowNumber}`);
+  return parts.join(" ") || "-";
+}
+
+function attendanceIssueText(row) {
+  return (row.issues || []).filter(Boolean).join(" ");
+}
+
 function buildSections(fields) {
   const used = new Set();
   const result = sections.map((section) => {
@@ -1856,6 +2204,7 @@ function buildSections(fields) {
 function blankFormData(fields) {
   const data = Object.fromEntries(fields.map((field) => [field, ""]));
   if (fields.includes("Verification Status")) data["Verification Status"] = "None";
+  if (fields.includes("Attendance")) data.Attendance = "0";
   return data;
 }
 

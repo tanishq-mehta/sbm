@@ -1,3 +1,5 @@
+import zlib from "node:zlib";
+
 const encoder = new TextEncoder();
 const crcTable = createCrcTable();
 
@@ -57,6 +59,26 @@ export function createWorkbookBuffer({ sheetName = "People", headers, rows }) {
   ];
 
   return zipStore(files);
+}
+
+export function readWorkbookSheets(buffer) {
+  const files = readZipEntries(Buffer.from(buffer));
+  const sharedStrings = parseSharedStrings(xmlText(files.get("xl/sharedStrings.xml")));
+  const workbookXml = xmlText(files.get("xl/workbook.xml"));
+  const relationshipXml = xmlText(files.get("xl/_rels/workbook.xml.rels"));
+  const workbookSheets = parseWorkbookSheets(workbookXml, relationshipXml);
+  const sheets = workbookSheets.length ? workbookSheets : worksheetSheets(files);
+
+  return sheets
+    .map((sheet) => {
+      const sheetXml = xmlText(files.get(sheet.path));
+      if (!sheetXml) return null;
+      return {
+        name: sheet.name,
+        rows: parseSheetRows(sheetXml, sharedStrings),
+      };
+    })
+    .filter(Boolean);
 }
 
 function createSheetXml(headers, rows) {
@@ -178,6 +200,184 @@ function xmlBuffer(value) {
   return Buffer.from(encoder.encode(value));
 }
 
+function readZipEntries(buffer) {
+  const endOffset = findEndOfCentralDirectory(buffer);
+  const entryCount = buffer.readUInt16LE(endOffset + 10);
+  const centralOffset = buffer.readUInt32LE(endOffset + 16);
+  const files = new Map();
+  let offset = centralOffset;
+
+  for (let index = 0; index < entryCount; index += 1) {
+    if (buffer.readUInt32LE(offset) !== 0x02014b50) {
+      throw new Error("Invalid XLSX central directory.");
+    }
+
+    const flags = buffer.readUInt16LE(offset + 8);
+    const compressionMethod = buffer.readUInt16LE(offset + 10);
+    const compressedSize = buffer.readUInt32LE(offset + 20);
+    const fileNameLength = buffer.readUInt16LE(offset + 28);
+    const extraLength = buffer.readUInt16LE(offset + 30);
+    const commentLength = buffer.readUInt16LE(offset + 32);
+    const localOffset = buffer.readUInt32LE(offset + 42);
+    const name = buffer
+      .subarray(offset + 46, offset + 46 + fileNameLength)
+      .toString(flags & 0x0800 ? "utf8" : "utf8");
+
+    if (flags & 0x0001) {
+      throw new Error("Encrypted XLSX files are not supported.");
+    }
+    if (compressedSize === 0xffffffff || localOffset === 0xffffffff) {
+      throw new Error("Zip64 XLSX files are not supported.");
+    }
+
+    files.set(name, readZipEntryContent(buffer, {
+      compressionMethod,
+      compressedSize,
+      localOffset,
+    }));
+    offset += 46 + fileNameLength + extraLength + commentLength;
+  }
+
+  return files;
+}
+
+function findEndOfCentralDirectory(buffer) {
+  const minOffset = Math.max(0, buffer.length - 65_557);
+  for (let offset = buffer.length - 22; offset >= minOffset; offset -= 1) {
+    if (buffer.readUInt32LE(offset) === 0x06054b50) return offset;
+  }
+  throw new Error("Invalid XLSX file.");
+}
+
+function readZipEntryContent(buffer, entry) {
+  if (buffer.readUInt32LE(entry.localOffset) !== 0x04034b50) {
+    throw new Error("Invalid XLSX local file header.");
+  }
+
+  const nameLength = buffer.readUInt16LE(entry.localOffset + 26);
+  const extraLength = buffer.readUInt16LE(entry.localOffset + 28);
+  const dataOffset = entry.localOffset + 30 + nameLength + extraLength;
+  const compressed = buffer.subarray(dataOffset, dataOffset + entry.compressedSize);
+
+  if (entry.compressionMethod === 0) return compressed;
+  if (entry.compressionMethod === 8) return zlib.inflateRawSync(compressed);
+  throw new Error("Unsupported XLSX compression method.");
+}
+
+function xmlText(value) {
+  return value ? Buffer.from(value).toString("utf8") : "";
+}
+
+function parseSharedStrings(xml) {
+  if (!xml) return [];
+  return [...xml.matchAll(/<si\b[^>]*>([\s\S]*?)<\/si>/g)].map((match) =>
+    textNodes(match[1])
+  );
+}
+
+function parseWorkbookSheets(workbookXml, relationshipXml) {
+  if (!workbookXml) return [];
+  const relationships = parseRelationships(relationshipXml);
+  const sheets = [];
+
+  for (const match of workbookXml.matchAll(/<sheet\b([^>]*)\/?>/g)) {
+    const attrs = parseAttributes(match[1]);
+    const relationshipId = attrs["r:id"];
+    const target = relationships.get(relationshipId);
+    if (!target) continue;
+    sheets.push({
+      name: attrs.name || `Sheet ${sheets.length + 1}`,
+      path: workbookRelationshipTargetPath(target),
+    });
+  }
+
+  return sheets;
+}
+
+function parseRelationships(xml) {
+  const relationships = new Map();
+  for (const match of xml.matchAll(/<Relationship\b([^>]*)\/?>/g)) {
+    const attrs = parseAttributes(match[1]);
+    if (attrs.Id && attrs.Target) relationships.set(attrs.Id, attrs.Target);
+  }
+  return relationships;
+}
+
+function workbookRelationshipTargetPath(target) {
+  const cleanTarget = String(target || "").replace(/^\/+/, "");
+  return cleanTarget.startsWith("xl/")
+    ? cleanTarget
+    : `xl/${cleanTarget}`;
+}
+
+function worksheetSheets(files) {
+  return [...files.keys()]
+    .filter((name) => /^xl\/worksheets\/sheet\d+\.xml$/i.test(name))
+    .sort((left, right) => left.localeCompare(right, "en", { numeric: true }))
+    .map((path, index) => ({
+      name: `Sheet ${index + 1}`,
+      path,
+    }));
+}
+
+function parseSheetRows(xml, sharedStrings) {
+  const rows = [];
+  for (const rowMatch of xml.matchAll(/<row\b([^>]*)>([\s\S]*?)<\/row>/g)) {
+    const rowAttrs = parseAttributes(rowMatch[1]);
+    const rowNumber = Number(rowAttrs.r || rows.length + 1);
+    const values = [];
+    let implicitColumn = 0;
+
+    for (const cellMatch of rowMatch[2].matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/g)) {
+      const attrs = parseAttributes(cellMatch[1]);
+      const columnIndex = attrs.r ? columnIndexFromRef(attrs.r) : implicitColumn;
+      values[columnIndex] = parseCellValue(attrs, cellMatch[2], sharedStrings);
+      implicitColumn = columnIndex + 1;
+    }
+
+    rows.push({
+      rowNumber: Number.isFinite(rowNumber) && rowNumber > 0 ? rowNumber : rows.length + 1,
+      values,
+    });
+  }
+  return rows;
+}
+
+function parseCellValue(attrs, cellXml, sharedStrings) {
+  const type = attrs.t || "";
+  if (type === "inlineStr") return textNodes(cellXml);
+
+  const valueMatch = cellXml.match(/<v\b[^>]*>([\s\S]*?)<\/v>/);
+  const value = valueMatch ? decodeXml(valueMatch[1]) : "";
+
+  if (type === "s") return sharedStrings[Number(value)] || "";
+  if (type === "b") return value === "1" ? "TRUE" : "FALSE";
+  return value;
+}
+
+function textNodes(xml) {
+  return [...xml.matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/g)]
+    .map((match) => decodeXml(match[1]))
+    .join("");
+}
+
+function parseAttributes(value) {
+  const attributes = {};
+  for (const match of String(value || "").matchAll(/([A-Za-z_:][\w:.-]*)="([^"]*)"/g)) {
+    attributes[match[1]] = decodeXml(match[2]);
+  }
+  return attributes;
+}
+
+function decodeXml(value) {
+  return String(value || "")
+    .replace(/&quot;/g, "\"")
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
 function columnName(index) {
   let name = "";
   while (index > 0) {
@@ -186,6 +386,15 @@ function columnName(index) {
     index = Math.floor((index - 1) / 26);
   }
   return name;
+}
+
+function columnIndexFromRef(ref) {
+  const match = String(ref || "").match(/^([A-Z]+)/i);
+  if (!match) return 0;
+  return match[1]
+    .toUpperCase()
+    .split("")
+    .reduce((index, letter) => index * 26 + letter.charCodeAt(0) - 64, 0) - 1;
 }
 
 function escapeXml(value) {

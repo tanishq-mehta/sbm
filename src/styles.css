@@ -1208,6 +1208,70 @@ tbody tr.condition-expired td:first-child {
   backdrop-filter: blur(10px);
 }
 
+.attendance-upload-panel {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) auto;
+  gap: 14px;
+  align-items: end;
+  border: 1px solid #dce4df;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 16px;
+}
+
+.attendance-results .results-header {
+  align-items: flex-start;
+}
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  background: rgba(23, 40, 38, 0.36);
+  padding: 18px;
+}
+
+.dialog-panel {
+  width: min(100%, 1040px);
+  max-height: min(780px, calc(100vh - 36px));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+  border: 1px solid #dce4df;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 24px 64px rgba(34, 48, 47, 0.22);
+}
+
+.dialog-panel header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  border-bottom: 1px solid #edf1ef;
+  padding: 16px;
+}
+
+.dialog-table-wrap {
+  overflow: auto;
+}
+
+.attendance-dialog table {
+  min-width: 920px;
+}
+
+.attendance-dialog input {
+  min-width: 180px;
+}
+
+.dialog-actions {
+  position: static;
+  border-width: 1px 0 0;
+  border-radius: 0;
+}
+
 @media (max-width: 780px) {
   .topbar {
     padding: 0 14px;
@@ -1224,6 +1288,7 @@ tbody tr.condition-expired td:first-child {
   }
 
   .search-bar,
+  .attendance-upload-panel,
   .field-grid,
   .summary-toolbar,
   .summary-grid,

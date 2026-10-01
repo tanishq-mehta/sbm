@@ -3,6 +3,11 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
+import {
+  formatAttendanceDateFromIso,
+  normalizeAttendanceBadge,
+  normalizeAttendanceDate,
+} from "./attendance.mjs";
 import { loadEnvFile } from "./env.mjs";
 
 loadEnvFile();
@@ -33,9 +38,12 @@ export const databaseProvider = process.env.DATABASE_URL ? "postgres" : "sqlite"
 const emailField = "Email Id";
 const serialField = "S No";
 const badgeField = "Badge no.";
+const ecNumberField = "EC No.";
 const statusField = "Status";
 const birthDateField = "Birth Date";
 const enrollmentDateField = "Date of Enrollment/ Date of Badge";
+const attendanceField = "Attendance";
+const lastAttendedDateField = "Last Attended Date";
 const conditionField = "Condition";
 const initiatedField = "Is Initiated";
 const verificationField = "Verification Status";
@@ -49,7 +57,7 @@ const conditionOptions = ["Active", "Inactive", "Cancelled", "Transferred", "Wit
 const initiatedOptions = ["Yes", "No"];
 const elderlyAlertResolvedStatuses = new Set(["ELDERLY", "ESS"]);
 const fatherNameNoiseWords = new Set(["DR", "LATE", "LT", "MISS", "MR", "MRS", "MS", "SH", "SHRI", "SMT", "SR"]);
-const dateFields = new Set([birthDateField, "Initiation Date", enrollmentDateField]);
+const dateFields = new Set([birthDateField, "Initiation Date", enrollmentDateField, lastAttendedDateField]);
 const departmentFields = new Set([localCentreField, majorCentreField]);
 const placeholderTextFields = new Set(["Profession", "Educational Qualification"]);
 const placeholderTextValues = new Set([
@@ -519,6 +527,43 @@ export async function importStatusValues(rows = [], options = {}) {
   }
 
   return statusImportResult(plan, selectedUpdates.length, source, options.returnSummary);
+}
+
+export async function applyAttendanceRows(rows = [], options = {}) {
+  await initializeDatabase({ seedIfEmpty: false });
+  const changedBy = normalizeChangedBy(options.changedBy || "attendance-upload");
+  const sourceRows = normalizeAttendanceImportRows(rows);
+  const people = (await getAllPersonRows()).map(rowToPerson);
+  const peopleByBadge = peopleByAttendanceBadgeKey(people);
+  const plan = buildAttendanceImportPlan(sourceRows, peopleByBadge);
+
+  if (databaseProvider === "postgres" && plan.updates.length) {
+    const client = await getPool().connect();
+    try {
+      await client.query("BEGIN");
+      for (let start = 0; start < plan.updates.length; start += 200) {
+        await applyPersonUpdateBatchPostgres(client, plan.updates.slice(start, start + 200), changedBy);
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  } else if (plan.updates.length) {
+    const db = getSqlite();
+    db.exec("BEGIN");
+    try {
+      applyPersonUpdateBatchSqlite(db, plan.updates, changedBy);
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  return attendanceImportResult(plan);
 }
 
 export async function mapMajorCentresFromDepartments(options = {}) {
@@ -3009,6 +3054,239 @@ function statusImportNameKey(value) {
   return normalizeValue(value).toUpperCase().replace(/[^A-Z0-9]+/g, "");
 }
 
+function normalizeAttendanceImportRows(rows) {
+  const sourceRows = Array.isArray(rows) ? rows : [];
+  return sourceRows.map((row, index) => {
+    const rawBadge = normalizeValue(attendanceIncomingValue(row, "badgeNo", "rawBadge"));
+    const rawDate = normalizeValue(attendanceIncomingValue(row, "attendanceDate", "rawDate"));
+    const badge = normalizeAttendanceBadge(rawBadge);
+    const date = normalizeAttendanceDate(rawDate);
+    const issues = [
+      badge.valid ? "" : badge.message,
+      date.valid ? "" : date.message,
+      row?.fileIssue ? "Workbook row could not be read." : "",
+    ].filter(Boolean);
+
+    return {
+      index,
+      clientRowId: normalizeValue(row?.clientRowId) || String(index + 1),
+      fileName: normalizeValue(row?.fileName),
+      sheetName: normalizeValue(row?.sheetName),
+      rowNumber: normalizeValue(row?.rowNumber),
+      rawBadge,
+      rawDate,
+      badgeNo: badge.value,
+      badgeType: badge.type,
+      attendanceDate: date.value,
+      attendanceDateIso: date.iso,
+      valid: issues.length === 0,
+      issues,
+    };
+  });
+}
+
+function attendanceIncomingValue(row, normalizedField, rawField) {
+  if (!row) return "";
+  return Object.hasOwn(row, normalizedField) ? row[normalizedField] : row[rawField];
+}
+
+function peopleByAttendanceBadgeKey(people) {
+  const byBadge = new Map();
+  for (const person of people) {
+    const data = person.data || {};
+    const badgeValues = [
+      person.badgeNo,
+      data[badgeField],
+      data[ecNumberField],
+    ];
+
+    for (const value of badgeValues) {
+      for (const key of attendanceBadgeKeys(value)) {
+        const matches = byBadge.get(key) || [];
+        if (!matches.some((match) => Number(match.id) === Number(person.id))) {
+          matches.push(person);
+          byBadge.set(key, matches);
+        }
+      }
+    }
+  }
+  return byBadge;
+}
+
+function attendanceBadgeKeys(value) {
+  const text = normalizeValue(value);
+  if (!text) return [];
+
+  const keys = new Set();
+  const badge = normalizeAttendanceBadge(text);
+  if (badge.value) keys.add(attendanceBadgeKey(badge.value));
+
+  const compact = text
+    .toUpperCase()
+    .replace(/[‐‑‒–—]/g, "-")
+    .replace(/\s+/g, "");
+  if (compact) keys.add(compact);
+
+  const digits = compact.replace(/\D/g, "");
+  if (/^\d+$/.test(compact) && digits) keys.add(`EC-${digits}`);
+  return [...keys].filter(Boolean);
+}
+
+function attendanceBadgeKey(value) {
+  const badge = normalizeAttendanceBadge(value);
+  return normalizeValue(badge.value || value).toUpperCase();
+}
+
+function buildAttendanceImportPlan(sourceRows, peopleByBadge) {
+  const entries = [];
+  const matchedEntries = [];
+
+  for (const source of sourceRows) {
+    const entry = {
+      source,
+      result: "",
+      message: "",
+      person: null,
+      oldAttendance: "",
+      newAttendance: "",
+      oldLastAttended: "",
+      newLastAttended: "",
+    };
+    entries.push(entry);
+
+    if (!source.valid) {
+      entry.result = "Skipped";
+      entry.message = source.issues.join(" ");
+      continue;
+    }
+
+    const matches = peopleByBadge.get(attendanceBadgeKey(source.badgeNo)) || [];
+    if (matches.length === 0) {
+      entry.result = "Not found";
+      entry.message = "No database user matched this badge number.";
+      continue;
+    }
+    if (matches.length > 1) {
+      entry.result = "Duplicate DB badge";
+      entry.message = "More than one database user matched this badge number.";
+      continue;
+    }
+
+    entry.person = matches[0];
+    matchedEntries.push(entry);
+  }
+
+  const groups = attendanceGroupsByPerson(matchedEntries);
+  const updates = [];
+
+  for (const group of groups.values()) {
+    const person = group.person;
+    const oldAttendance = attendanceCount(person.data?.[attendanceField]);
+    const oldLastAttended = normalizeValue(person.data?.[lastAttendedDateField]);
+    const oldLastIso = attendanceDateIso(oldLastAttended);
+    const newestIso = group.entries.reduce(
+      (newest, entry) => latestDateIso(newest, entry.source.attendanceDateIso),
+      oldLastIso
+    );
+    const newAttendance = oldAttendance + group.entries.length;
+    const newLastAttended = newestIso ? formatAttendanceDateFromIso(newestIso) : oldLastAttended;
+    const data = cleanData({
+      ...(person.data || {}),
+      [attendanceField]: String(newAttendance),
+      [lastAttendedDateField]: newLastAttended,
+    });
+    const summary = summarize(data);
+    const change = diffData(person.data || {}, data);
+
+    for (const entry of group.entries) {
+      entry.result = "Updated";
+      entry.message = "Attendance registered.";
+      entry.oldAttendance = String(oldAttendance);
+      entry.newAttendance = String(newAttendance);
+      entry.oldLastAttended = oldLastAttended;
+      entry.newLastAttended = newLastAttended;
+    }
+
+    if (Object.keys(change).length) {
+      updates.push({
+        person,
+        data,
+        summary,
+        change,
+      });
+    }
+  }
+
+  return { sourceRows, entries, updates };
+}
+
+function attendanceGroupsByPerson(entries) {
+  const groups = new Map();
+  for (const entry of entries) {
+    const key = Number(entry.person.id);
+    const group = groups.get(key) || {
+      person: entry.person,
+      entries: [],
+    };
+    group.entries.push(entry);
+    groups.set(key, group);
+  }
+  return groups;
+}
+
+function attendanceImportResult(plan) {
+  const rows = plan.entries.map(attendanceImportReportRow);
+  return {
+    summary: {
+      uploadedRows: plan.entries.length,
+      updatedRows: plan.entries.filter((entry) => entry.result === "Updated").length,
+      updatedPeople: plan.updates.length,
+      invalidRows: plan.entries.filter((entry) => entry.result === "Skipped").length,
+      notFoundRows: plan.entries.filter((entry) => entry.result === "Not found").length,
+      duplicateDbBadgeRows: plan.entries.filter((entry) => entry.result === "Duplicate DB badge").length,
+    },
+    rows,
+  };
+}
+
+function attendanceImportReportRow(entry) {
+  const source = entry.source;
+  const person = entry.person;
+  return {
+    File: source.fileName,
+    Sheet: source.sheetName,
+    Row: source.rowNumber,
+    "Original Badge": source.rawBadge,
+    "Final Badge": source.badgeNo,
+    "Badge Type": source.badgeType,
+    "Attendance Date": source.attendanceDate,
+    Name: person?.fullName || "",
+    "DB Badge": person ? normalizeValue(person.data?.[badgeField] || person.badgeNo) : "",
+    Result: entry.result,
+    Message: entry.message,
+    "Attendance Before": entry.oldAttendance,
+    "Attendance After": entry.newAttendance,
+    "Last Attended Before": entry.oldLastAttended,
+    "Last Attended After": entry.newLastAttended,
+  };
+}
+
+function attendanceCount(value) {
+  const count = Number(normalizeValue(value));
+  return Number.isFinite(count) && count > 0 ? Math.floor(count) : 0;
+}
+
+function attendanceDateIso(value) {
+  const date = normalizeAttendanceDate(value);
+  return date.valid ? date.iso : "";
+}
+
+function latestDateIso(left, right) {
+  if (!left) return right || "";
+  if (!right) return left;
+  return right > left ? right : left;
+}
+
 function normalizeValue(value) {
   if (value === null || value === undefined) return "";
   return String(value).trim();
@@ -3022,6 +3300,7 @@ function normalizeFieldValue(field, value) {
   if (field === fatherNameField) return normalizeFatherNameValue(normalized);
   if (field === conditionField) return normalizeOptionValue(normalized, conditionOptions);
   if (field === initiatedField) return normalizeOptionValue(normalized, initiatedOptions);
+  if (field === attendanceField) return normalizeAttendanceCountValue(normalized);
   if (dateFields.has(field)) return normalizeDateValue(normalized);
   if (departmentFields.has(field)) return normalizeDepartmentValue(normalized);
   if (placeholderTextFields.has(field)) return sanitizePlaceholderTextValue(normalized);
@@ -3073,6 +3352,13 @@ function normalizeDateValue(value) {
   const parsed = parseDateParts(value);
   if (!parsed) return normalizeValue(value);
   return `${parsed.day}-${monthNames[parsed.month - 1]}-${String(parsed.year).slice(-2)}`;
+}
+
+function normalizeAttendanceCountValue(value) {
+  const normalized = normalizeValue(value);
+  if (!normalized) return "0";
+  const count = Number(normalized);
+  return Number.isFinite(count) && count >= 0 ? String(Math.floor(count)) : normalized;
 }
 
 function parseDateParts(value) {
@@ -3298,7 +3584,9 @@ function summarize(data) {
 }
 
 function emptyData() {
-  return Object.fromEntries(fields.map((field) => [field, ""]));
+  const data = Object.fromEntries(fields.map((field) => [field, ""]));
+  if (fields.includes(attendanceField)) data[attendanceField] = "0";
+  return data;
 }
 
 async function nextSerialNumberPostgres(client, badgeNo) {
@@ -3596,6 +3884,42 @@ async function applyPersonUpdateBatchPostgres(client, batch, changedBy) {
     `,
     values
   );
+}
+
+function applyPersonUpdateBatchSqlite(db, batch, changedBy) {
+  const updatePersonRecord = db.prepare(`
+    UPDATE people
+    SET full_name = ?,
+        badge_no = ?,
+        department = ?,
+        phone_number = ?,
+        data = ?,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+      AND deleted_at IS NULL
+  `);
+  const insertAudit = db.prepare(`
+    INSERT INTO audit_logs (person_id, name, badge_no, changed_by, action, "change")
+    VALUES (?, ?, ?, ?, 'update', ?)
+  `);
+
+  for (const update of batch) {
+    updatePersonRecord.run(
+      update.summary.fullName,
+      update.summary.badgeNo,
+      update.summary.department,
+      update.summary.phoneNumber,
+      JSON.stringify(update.data),
+      update.person.id
+    );
+    insertAudit.run(
+      update.person.id,
+      update.summary.fullName,
+      update.summary.badgeNo,
+      changedBy,
+      JSON.stringify(update.change)
+    );
+  }
 }
 
 function comparePeopleForSerialNumber(a, b) {
