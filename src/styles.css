@@ -1219,6 +1219,59 @@ tbody tr.condition-expired td:first-child {
   padding: 16px;
 }
 
+.attendance-manual-panel {
+  margin-top: 16px;
+  border: 1px solid #dce4df;
+  border-radius: 8px;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.attendance-manual-header {
+  margin: 0;
+}
+
+.manual-date-toggle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 36px;
+  font-size: 0.86rem;
+  white-space: nowrap;
+}
+
+.manual-date-toggle input {
+  width: 18px;
+  min-height: 18px;
+}
+
+.manual-attendance-list {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px 0;
+}
+
+.manual-attendance-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(150px, 1fr) auto auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.manual-attendance-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 16px 16px;
+}
+
+.attendance-add-button {
+  min-width: 42px;
+  padding: 0;
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
 .attendance-results .results-header {
   align-items: flex-start;
 }
@@ -1289,6 +1342,7 @@ tbody tr.condition-expired td:first-child {
 
   .search-bar,
   .attendance-upload-panel,
+  .manual-attendance-row,
   .field-grid,
   .summary-toolbar,
   .summary-grid,
@@ -1300,9 +1354,14 @@ tbody tr.condition-expired td:first-child {
   }
 
   .page-actions,
-  .topbar-actions {
+  .topbar-actions,
+  .manual-attendance-actions {
     justify-content: flex-start;
     flex-wrap: wrap;
+  }
+
+  .manual-date-toggle {
+    white-space: normal;
   }
 
   .alert-menu-wrapper {

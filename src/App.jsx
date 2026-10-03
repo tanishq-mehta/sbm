@@ -1277,9 +1277,19 @@ function DataQualityListPage({ token, route }) {
   );
 }
 
+function newManualAttendanceRow(attendanceDate = "") {
+  return {
+    id: `manual-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    badgeNo: "",
+    attendanceDate,
+  };
+}
+
 function AttendancePage({ token }) {
   const [files, setFiles] = useState([]);
   const [rows, setRows] = useState([]);
+  const [manualRows, setManualRows] = useState(() => [newManualAttendanceRow()]);
+  const [copyManualDate, setCopyManualDate] = useState(true);
   const [summary, setSummary] = useState(null);
   const [result, setResult] = useState(null);
   const [reviewOpen, setReviewOpen] = useState(false);
@@ -1335,14 +1345,14 @@ function AttendancePage({ token }) {
     );
   }
 
-  async function applyAttendance() {
+  async function submitAttendanceRows(rowsToApply) {
     setError("");
     setApplying(true);
     try {
       const payload = await apiFetch("/api/admin/attendance/apply", {
         method: "POST",
         token,
-        body: JSON.stringify({ rows }),
+        body: JSON.stringify({ rows: rowsToApply }),
       });
       setResult(payload);
       setReviewOpen(false);
@@ -1351,6 +1361,61 @@ function AttendancePage({ token }) {
     } finally {
       setApplying(false);
     }
+  }
+
+  async function applyAttendance() {
+    await submitAttendanceRows(rows);
+  }
+
+  async function submitManualAttendance(event) {
+    event.preventDefault();
+    const manualAttendanceRows = manualRows
+      .map((row, index) => ({
+        clientRowId: row.id,
+        fileName: "Manual entry",
+        sheetName: "Manual",
+        rowNumber: index + 1,
+        rawBadge: row.badgeNo,
+        badgeNo: row.badgeNo,
+        rawDate: row.attendanceDate,
+        attendanceDate: row.attendanceDate,
+      }))
+      .filter((row) => row.rawBadge.trim() || row.rawDate.trim());
+
+    if (!manualAttendanceRows.length) {
+      setError("Enter at least one badge number and date.");
+      return;
+    }
+
+    setRows([]);
+    setSummary(null);
+    await submitAttendanceRows(manualAttendanceRows);
+  }
+
+  function updateManualRow(id, patch) {
+    setManualRows((current) =>
+      current.map((row) => (row.id === id ? { ...row, ...patch } : row))
+    );
+  }
+
+  function addManualRow() {
+    setManualRows((current) => {
+      const lastDate = current[current.length - 1]?.attendanceDate || "";
+      return [...current, newManualAttendanceRow(copyManualDate ? lastDate : "")];
+    });
+  }
+
+  function removeManualRow(id) {
+    setManualRows((current) => {
+      const nextRows = current.filter((row) => row.id !== id);
+      return nextRows.length ? nextRows : [newManualAttendanceRow()];
+    });
+  }
+
+  function usePreviousManualDate(index) {
+    if (index <= 0) return;
+    const previousDate = manualRows[index - 1]?.attendanceDate || "";
+    updateManualRow(manualRows[index].id, { attendanceDate: previousDate });
   }
 
   function downloadReport() {
@@ -1363,7 +1428,7 @@ function AttendancePage({ token }) {
       <section className="page-heading">
         <div>
           <p className="eyebrow">Attendance maintenance</p>
-          <h1>Upload attendance Excel files</h1>
+          <h1>Upload or enter attendance</h1>
         </div>
         <div className="page-actions">
           <button className="secondary-button" onClick={() => (window.location.hash = "#/home")}>
@@ -1389,6 +1454,73 @@ function AttendancePage({ token }) {
 
       {files.length ? <p className="result-note">Selected: {files.map((file) => file.name).join(", ")}</p> : null}
       {error ? <p className="form-error wide">{error}</p> : null}
+
+      <form className="attendance-manual-panel" onSubmit={submitManualAttendance}>
+        <div className="results-header attendance-manual-header">
+          <div>
+            <p className="eyebrow">Manual entry</p>
+            <h2>Attendance rows</h2>
+          </div>
+          <label className="manual-date-toggle">
+            <input
+              type="checkbox"
+              checked={copyManualDate}
+              onChange={(event) => setCopyManualDate(event.target.checked)}
+            />
+            <span>Use last date for new rows</span>
+          </label>
+        </div>
+        <div className="manual-attendance-list">
+          {manualRows.map((row, index) => (
+            <div className="manual-attendance-row" key={row.id}>
+              <label>
+                <span>Badge no.</span>
+                <input
+                  value={row.badgeNo}
+                  onChange={(event) => updateManualRow(row.id, { badgeNo: event.target.value })}
+                />
+              </label>
+              <label>
+                <span>Date</span>
+                <input
+                  value={row.attendanceDate}
+                  onChange={(event) => updateManualRow(row.id, { attendanceDate: event.target.value })}
+                />
+              </label>
+              <button
+                type="button"
+                className="secondary-button compact"
+                onClick={() => usePreviousManualDate(index)}
+                disabled={index === 0 || applying}
+              >
+                Use previous date
+              </button>
+              <button
+                type="button"
+                className="secondary-button compact attendance-row-remove"
+                onClick={() => removeManualRow(row.id)}
+                disabled={applying || manualRows.length === 1}
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+        <div className="manual-attendance-actions">
+          <button
+            type="button"
+            className="secondary-button compact attendance-add-button"
+            onClick={addManualRow}
+            disabled={applying}
+            aria-label="Add attendance row"
+          >
+            +
+          </button>
+          <button type="submit" className="primary-button" disabled={applying}>
+            {applying ? "Submitting..." : "Submit manual attendance"}
+          </button>
+        </div>
+      </form>
 
       {summary ? (
         <section className="results-panel attendance-results">
@@ -1490,7 +1622,7 @@ function AttendancePage({ token }) {
               </table>
             </div>
           ) : (
-            <p className="empty-state">All uploaded attendance rows were applied.</p>
+            <p className="empty-state">All attendance rows were applied.</p>
           )}
         </section>
       ) : null}

@@ -345,29 +345,166 @@ function datePartsFromExcelSerial(serial) {
 }
 
 function parseDateParts(value) {
-  const text = normalizeValue(value);
+  const text = normalizeDateText(value);
   if (!text) return null;
 
-  let match = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
-  if (match) return validDate(Number(match[1]), Number(match[2]), Number(match[3]));
+  const relative = relativeDateParts(text);
+  if (relative) return relative;
 
-  match = text.match(/^(\d{1,2})[-/\s]([A-Za-z]{3,9})[-/\s](\d{2,4})$/);
-  if (match) {
-    const month = monthFromText(match[2]);
-    return month ? validDate(expandYear(match[3]), month, Number(match[1])) : null;
-  }
+  return (
+    parseCompactNumericDate(text) ||
+    parseTextMonthDate(text) ||
+    parseDelimitedNumericDate(text) ||
+    parseNativeDate(text)
+  );
+}
 
-  match = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
-  if (match) return validDate(expandYear(match[3]), Number(match[2]), Number(match[1]));
+function normalizeDateText(value) {
+  return normalizeValue(value)
+    .replace(/[‐‑‒–—]/g, "-")
+    .replace(/\b(\d{1,2})(st|nd|rd|th)\b/gi, "$1")
+    .replace(/\bat\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
-  match = text.match(/^(\d{1,2})-(\d{1,2})-(\d{2,4})$/);
-  if (match) return validDate(expandYear(match[3]), Number(match[2]), Number(match[1]));
-
+function relativeDateParts(value) {
+  const text = value.toLowerCase();
+  const today = new Date();
+  if (text === "today") return datePartsFromDate(today);
+  if (text === "yesterday") return datePartsFromDate(addDays(today, -1));
+  if (text === "tomorrow") return datePartsFromDate(addDays(today, 1));
   return null;
 }
 
+function addDays(value, days) {
+  const date = new Date(Date.UTC(value.getFullYear(), value.getMonth(), value.getDate()));
+  date.setUTCDate(date.getUTCDate() + days);
+  return date;
+}
+
+function parseCompactNumericDate(value) {
+  const compact = value.replace(/\D/g, "");
+  if (!/^\d{6}$|^\d{8}$/.test(compact)) return null;
+
+  const candidates = [];
+  if (compact.length === 8) {
+    candidates.push(
+      [Number(compact.slice(0, 4)), Number(compact.slice(4, 6)), Number(compact.slice(6, 8))],
+      [Number(compact.slice(4, 8)), Number(compact.slice(2, 4)), Number(compact.slice(0, 2))],
+      [Number(compact.slice(4, 8)), Number(compact.slice(0, 2)), Number(compact.slice(2, 4))]
+    );
+  } else {
+    candidates.push(
+      [expandYear(compact.slice(4, 6)), Number(compact.slice(2, 4)), Number(compact.slice(0, 2))],
+      [expandYear(compact.slice(4, 6)), Number(compact.slice(0, 2)), Number(compact.slice(2, 4))]
+    );
+  }
+
+  return firstValidDate(candidates);
+}
+
+function parseTextMonthDate(value) {
+  const tokens = value
+    .replace(/[,.]/g, " ")
+    .replace(/[/-]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((token, index) => dateToken(token, index))
+    .filter(Boolean);
+  const monthToken = tokens.find((token) => token.type === "month");
+  if (!monthToken) return null;
+
+  const numbers = tokens.filter((token) => token.type === "number");
+  const beforeMonth = numbers.filter((token) => token.index < monthToken.index);
+  const afterMonth = numbers.filter((token) => token.index > monthToken.index);
+  const yearCandidates = numbers.filter((token) => token.text.length >= 2 || token.value > 31);
+  const dayCandidates = numbers.filter((token) => token.value >= 1 && token.value <= 31);
+  const candidates = [];
+
+  if (beforeMonth.length && afterMonth.length) {
+    const before = beforeMonth[beforeMonth.length - 1];
+    const after = afterMonth[0];
+    if (before.text.length === 4 || before.value > 31) {
+      candidates.push([expandYear(before.text), monthToken.value, after.value]);
+    } else {
+      candidates.push([expandYear(after.text), monthToken.value, before.value]);
+    }
+  } else if (afterMonth.length >= 2) {
+    candidates.push([expandYear(afterMonth[1].text), monthToken.value, afterMonth[0].value]);
+  } else if (beforeMonth.length >= 2) {
+    candidates.push(
+      [expandYear(beforeMonth[0].text), monthToken.value, beforeMonth[1].value],
+      [expandYear(beforeMonth[1].text), monthToken.value, beforeMonth[0].value]
+    );
+  }
+
+  for (const year of yearCandidates) {
+    for (const day of dayCandidates) {
+      if (day === year) continue;
+      candidates.push([expandYear(year.text), monthToken.value, day.value]);
+    }
+  }
+
+  if (!candidates.length && dayCandidates.length === 1) {
+    candidates.push([new Date().getFullYear(), monthToken.value, dayCandidates[0].value]);
+  }
+
+  return firstValidDate(candidates);
+}
+
+function dateToken(value, index) {
+  const text = value.toLowerCase();
+  const month = monthFromText(text);
+  if (month) return { type: "month", value: month, text, index };
+  if (/^\d{1,4}$/.test(text)) return { type: "number", value: Number(text), text, index };
+  return null;
+}
+
+function parseDelimitedNumericDate(value) {
+  const match = value.match(/^\D*(\d{1,4})\D+(\d{1,2})(?:\D+(\d{1,4}))?(?:\D.*)?$/);
+  if (!match) return null;
+
+  const first = numberPart(match[1]);
+  const second = numberPart(match[2]);
+  const third = match[3] ? numberPart(match[3]) : null;
+  const currentYear = new Date().getFullYear();
+  const candidates = [];
+
+  if (third) {
+    if (first.text.length === 4) {
+      candidates.push([first.value, second.value, third.value]);
+    } else {
+      const year = expandYear(third.text);
+      const dayFirst = first.value > 12 || second.value <= 12;
+      if (dayFirst) candidates.push([year, second.value, first.value], [year, first.value, second.value]);
+      else candidates.push([year, first.value, second.value], [year, second.value, first.value]);
+    }
+  } else {
+    const dayFirst = first.value > 12 || second.value <= 12;
+    if (dayFirst) candidates.push([currentYear, second.value, first.value], [currentYear, first.value, second.value]);
+    else candidates.push([currentYear, first.value, second.value], [currentYear, second.value, first.value]);
+  }
+
+  return firstValidDate(candidates);
+}
+
+function numberPart(text) {
+  return {
+    text,
+    value: Number(text),
+  };
+}
+
+function parseNativeDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return validDate(date.getFullYear(), date.getMonth() + 1, date.getDate());
+}
+
 function monthFromText(value) {
-  const index = monthNames.findIndex((month) => normalizeValue(value).toLowerCase().startsWith(month));
+  const normalized = normalizeValue(value).toLowerCase().replace(/\.$/, "");
+  const index = monthNames.findIndex((month) => normalized.startsWith(month));
   return index === -1 ? 0 : index + 1;
 }
 
@@ -375,8 +512,25 @@ function expandYear(value) {
   const text = String(value);
   const year = Number(text);
   if (text.length === 4) return year;
-  const currentTwoDigitYear = new Date().getFullYear() % 100;
-  return year <= currentTwoDigitYear ? 2000 + year : 1900 + year;
+  return year >= 70 ? 1900 + year : 2000 + year;
+}
+
+function firstValidDate(candidates) {
+  for (const [year, month, day] of candidates) {
+    const parsed = validDate(year, month, day);
+    if (parsed) return parsed;
+  }
+  return null;
+}
+
+function datePartsFromDate(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return {
+    year: date.getFullYear(),
+    month: date.getMonth() + 1,
+    day: date.getDate(),
+  };
 }
 
 function validDate(year, month, day) {
