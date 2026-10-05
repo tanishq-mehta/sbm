@@ -166,11 +166,7 @@ export default function App() {
           initialMajorCentreOnlyNonElderly={route.onlyNonElderly}
         />
       ) : route.name === "attendance" ? (
-        canManageUsers ? (
-          <AttendancePage token={token} />
-        ) : (
-          <ForbiddenPage />
-        )
+        <AttendancePage token={token} />
       ) : route.name === "new-person" ? (
         canManageUsers ? (
           <PersonPage token={token} isNew canManageUsers returnTo={route.returnTo} />
@@ -285,11 +281,9 @@ function Shell({ children, onLogout, user, token }) {
           <button className="secondary-button compact" onClick={() => (window.location.hash = "#/summary")}>
             Summary
           </button>
-          {user?.isAdmin ? (
-            <button className="secondary-button compact" onClick={() => (window.location.hash = "#/attendance")}>
-              Attendance
-            </button>
-          ) : null}
+          <button className="secondary-button compact" onClick={() => (window.location.hash = "#/attendance")}>
+            Attendance
+          </button>
           <button className="secondary-button compact" onClick={() => (window.location.hash = "#/audit")}>
             Audit history
           </button>
@@ -517,11 +511,9 @@ function HomePage({ token, canManageUsers }) {
               Create new user
             </button>
           ) : null}
-          {canManageUsers ? (
-            <button className="secondary-button" onClick={() => (window.location.hash = "#/attendance")}>
-              Attendance maintenance
-            </button>
-          ) : null}
+          <button className="secondary-button" onClick={() => (window.location.hash = "#/attendance")}>
+            Attendance maintenance
+          </button>
           <button className="secondary-button" onClick={() => (window.location.hash = "#/summary")}>
             Summary
           </button>

@@ -746,8 +746,6 @@ function isAdminOnlyMutation(url, method) {
     (url.pathname === "/api/admin/clean-emails" && method === "POST") ||
     (url.pathname === "/api/admin/clean-placeholder-text" && method === "POST") ||
     (url.pathname === "/api/admin/import-statuses" && method === "POST") ||
-    (url.pathname === "/api/admin/attendance/preview" && method === "POST") ||
-    (url.pathname === "/api/admin/attendance/apply" && method === "POST") ||
     (url.pathname === "/api/admin/map-major-centres" && method === "POST") ||
     (method === "DELETE" && /^\/api\/people\/\d+$/.test(url.pathname)) ||
     (method === "POST" && /^\/api\/audits\/\d+\/restore$/.test(url.pathname))
@@ -775,12 +773,6 @@ function adminOnlyMessage(url, method) {
   }
   if (url.pathname === "/api/admin/import-statuses" && method === "POST") {
     return "Only admin users can import status values.";
-  }
-  if (url.pathname === "/api/admin/attendance/preview" && method === "POST") {
-    return "Only admin users can preview attendance uploads.";
-  }
-  if (url.pathname === "/api/admin/attendance/apply" && method === "POST") {
-    return "Only admin users can apply attendance uploads.";
   }
   if (url.pathname === "/api/admin/map-major-centres" && method === "POST") {
     return "Only admin users can map Major Centre values.";
