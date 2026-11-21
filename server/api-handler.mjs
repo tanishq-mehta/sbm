@@ -34,6 +34,7 @@ import {
   updatePerson,
 } from "./database.mjs";
 import { createWorkbookBuffer } from "./xlsx.mjs";
+import { isAuthorizedElderlyCron } from "./elderly-cron-auth.mjs";
 import {
   attendanceReportHeaders,
   attendanceReportRows,
@@ -117,19 +118,14 @@ export async function handleApiRequest(req, res) {
       return;
     }
 
-    if (url.pathname === "/api/cron/elderly-alerts" && req.method === "GET") {
-      if (!isValidCronRequest(req)) {
+    if (url.pathname === "/api/cron/elderly-alerts" && req.method === "POST") {
+      if (!(await isAuthorizedElderlyCron(req.headers.authorization))) {
         sendJson(res, 401, { message: "Cron authorization required." });
         return;
       }
 
       await ensureDatabaseInitialized();
-      const asOf = elderlyAlertMonthlyCutoffDate();
-      sendJson(res, 200, await runElderlyAlertScan({
-        asOf,
-        runKey: elderlyAlertMonthlyRunKey(asOf),
-        source: "vercel-cron",
-      }));
+      sendJson(res, 200, await runMonthlyElderlyAlerts("github-actions"));
       return;
     }
 
@@ -276,6 +272,11 @@ export async function handleApiRequest(req, res) {
     }
 
     if (url.pathname === "/api/elderly-alerts" && req.method === "GET") {
+      try {
+        await runMonthlyElderlyAlerts("alerts-view");
+      } catch (error) {
+        console.error("Elderly alert catch-up failed:", error);
+      }
       sendJson(res, 200, await listElderlyAlerts());
       return;
     }
@@ -707,10 +708,9 @@ function getAuthenticatedUser(req) {
   return type === "Bearer" ? verifySessionToken(token) : null;
 }
 
-function isValidCronRequest(req) {
-  const secret = String(process.env.CRON_SECRET || "").trim();
-  if (!secret) return false;
-  return req.headers.authorization === `Bearer ${secret}`;
+function runMonthlyElderlyAlerts(source) {
+  const asOf = elderlyAlertMonthlyCutoffDate();
+  return runElderlyAlertScan({ asOf, runKey: elderlyAlertMonthlyRunKey(asOf), source });
 }
 
 function elderlyAlertMonthlyCutoffDate(date = new Date()) {

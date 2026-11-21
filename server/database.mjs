@@ -1581,6 +1581,10 @@ async function runElderlyAlertScanInternal(options = {}) {
   const asOfIso = datePartsToIso(asOfParts);
   const source = normalizeValue(options.source || options.changedBy || "manual") || "manual";
   const runKey = normalizeValue(options.runKey);
+  if (runKey) {
+    const completedRun = await getExistingElderlyAlertRunSummary(runKey);
+    if (completedRun) return completedRun;
+  }
   const people = (await getAllPersonRows()).map(rowToPerson);
   const pendingBefore = await pendingElderlyAlertPersonIds();
   const scanPlan = buildElderlyAlertScanPlan(people, asOfParts, pendingBefore);
@@ -1851,19 +1855,16 @@ async function getExistingElderlyAlertRunSummary(runKey) {
         .prepare("SELECT run_key, source, summary, created_at FROM elderly_alert_runs WHERE run_key = ?")
         .get(runKey);
 
-  const summary = row?.summary
-    ? typeof row.summary === "string"
-      ? JSON.parse(row.summary)
-      : row.summary
-    : {};
+  if (!row) return null;
+  const summary = typeof row.summary === "string" ? JSON.parse(row.summary) : row.summary;
 
   return {
     ...summary,
     runKey,
-    source: row?.source || summary.source || "",
+    source: row.source,
     skipped: true,
     message: "This scan has already run.",
-    createdAt: row?.created_at || "",
+    createdAt: row.created_at,
   };
 }
 

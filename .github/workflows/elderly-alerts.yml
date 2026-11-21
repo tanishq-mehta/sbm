@@ -1,0 +1,30 @@
+name: Monthly elderly alerts
+
+on:
+  schedule:
+    # 05:47 India Standard Time on the first of each month.
+    - cron: "17 0 1 * *"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Run production scan
+        env:
+          ALERT_ENDPOINT: https://sbm-ecru.vercel.app/api/cron/elderly-alerts
+        run: |
+          set -euo pipefail
+          token=$(curl --fail --silent --show-error --max-time 15 --get \
+            --header "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            --data-urlencode "audience=$ALERT_ENDPOINT" "$ACTIONS_ID_TOKEN_REQUEST_URL" \
+            | jq -er '.value')
+          echo "::add-mask::$token"
+          result=$(curl --fail --silent --show-error --max-time 45 --retry 2 --retry-delay 5 \
+            --request POST --header "Authorization: Bearer $token" "$ALERT_ENDPOINT")
+          jq -e '.ok == true' <<< "$result" >/dev/null
+          jq '{asOf, skipped: (.skipped // false)}' <<< "$result"
